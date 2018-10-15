@@ -1,4 +1,4 @@
-/*! CSS-REGIONS-POLYFILL - v3.0.0 - 2018-03-23 - https://github.com/FremyCompany/css-regions-polyfill - Copyright (c) 2018 François REMY; MIT-Licensed !*/
+/*! CSS-REGIONS-POLYFILL - v3.0.0 - 2018-10-15 - https://github.com/FremyCompany/css-regions-polyfill - Copyright (c) 2018 François REMY; MIT-Licensed !*/
 
 !(function() { 'use strict';
     var module = { exports:{} };
@@ -2253,815 +2253,808 @@ require.define('src/core/dom-query-selector-live.js');
 
 // TODO: comment about the 'no_auto_stylesheet_detection' flag?
 
-module.exports = (function(window, document) { "use strict";
-	
-	// import dependencies
-	require('src/core/polyfill-dom-console.js');
-	require('src/core/polyfill-dom-requestAnimationFrame.js');
-	var cssSyntax = require('src/core/css-syntax.js');
-	var domEvents = require('src/core/dom-events.js');
-	var querySelectorLive = require('src/core/dom-query-selector-live.js');
-	
-	// define the module
-	var cssCascade = {
-		
-		//
-		// returns the priority of a unique selector (NO COMMA!)
-		// { the return value is an integer, with the same formula as webkit }
-		//
-		computeSelectorPriorityOf: function computeSelectorPriorityOf(selector) {
-			if(typeof selector == "string") selector = cssSyntax.parse(selector.trim()+"{}").value[0].selector;
-			
-			var numberOfIDs = 0;
-			var numberOfClasses = 0;
-			var numberOfTags = 0;
-			
-			// TODO: improve this parser, or find one on the web
-			for(var i = 0; i < selector.length; i++) {
-				
-				if(selector[i] instanceof cssSyntax.IdentifierToken) {
-					numberOfTags++;
-					
-				} else if(selector[i] instanceof cssSyntax.DelimToken) {
-					if(selector[i].value==".") {
-						numberOfClasses++; i++;
-					}
-					
-				} else if(selector[i] instanceof cssSyntax.ColonToken) {
-					if(selector[++i] instanceof cssSyntax.ColonToken) {
-						numberOfTags++; i++;
-						
-					} else if((selector[i] instanceof cssSyntax.Func) && (/^(not|matches)$/i).test(selector[i].name)) {
-						var nestedPriority = this.computeSelectorPriorityOf(selector[i].value);
-						numberOfTags += nestedPriority % 256; nestedPriority /= 256;
-						numberOfClasses += nestedPriority % 256; nestedPriority /= 256;
-						numberOfIDs += nestedPriority;
-						
-					} else {
-						numberOfClasses++;
-						
-					}
-					
-				} else if(selector[i] instanceof cssSyntax.SimpleBlock) {
-					if(selector[i].name=="[") {
-						numberOfClasses++;
-					}
-					
-				} else if(selector[i] instanceof cssSyntax.HashToken) {
-					numberOfIDs++;
-					
-				} else {
-					// TODO: stop ignoring unknown symbols?
-					
-				}
-				
-			}
-			
-			if(numberOfIDs>255) numberOfIDs=255;
-			if(numberOfClasses>255) numberOfClasses=255;
-			if(numberOfTags>255) numberOfTags=255;
-			
-			return ((numberOfIDs*256)+numberOfClasses)*256+numberOfTags;
-			
-		},
-		
-		//
-		// returns an array of the css rules matching an element
-		//
-		findAllMatchingRules: function findAllMatchingRules(element) {
-			return this.findAllMatchingRulesWithPseudo(element);
-		},
-		
-		//
-		// returns an array of the css rules matching a pseudo-element
-		//
-		findAllMatchingRulesWithPseudo: function findAllMatchingRules(element,pseudo) {
-			pseudo = pseudo ? (''+pseudo).toLowerCase() : pseudo;
-			
-			// let's look for new results if needed...
-			var results = [];
-			
-			// walk the whole stylesheet...
-			var visit = function(rules) {
-				try {
-					for(var r = rules.length; r--; ) {
-						var rule = rules[r]; 
-						
-						// media queries hook
-						if(rule.disabled) continue;
-						
-						if(rule instanceof cssSyntax.StyleRule) {
-							
-							// consider each selector independently
-							var subrules = rule.subRules || cssCascade.splitRule(rule);
-							for(var sr = subrules.length; sr--; ) {
-								
-								var selector = subrules[sr].selector.toCSSString().replace(/ *(\/\*\*\/|  ) */g,' ').trim();
-								if(pseudo) {
-									// WE ONLY ACCEPT SELECTORS ENDING WITH THE PSEUDO
-									var selectorLow = selector.toLowerCase();
-									var newLength = selector.length-pseudo.length-1;
-									if(newLength<=0) continue;
-									
-									if(selectorLow.lastIndexOf('::'+pseudo)==newLength-1) {
-										selector = selector.substr(0,newLength-1);
-									} else if(selectorLow.lastIndexOf(':'+pseudo)==newLength) {
-										selector = selector.substr(0,newLength);
-									} else {
-										continue;
-									}
-									
-									// fix selectors like "#element > :first-child ~ ::before"
-									if(selector.trim().length == 0) { selector = '*' }
-									else if(selector[selector.length-1] == ' ') { selector += '*' }
-									else if(selector[selector.length-1] == '+') { selector += '*' }
-									else if(selector[selector.length-1] == '>') { selector += '*' }
-									else if(selector[selector.length-1] == '~') { selector += '*' }
-									
-								}
-								
-								// look if the selector matches
-								var isMatching = false;
-								try {
-									if(element.matches) isMatching=element.matches(selector)
-									else if(element.matchesSelector) isMatching=element.matchesSelector(selector)
-									else if(element.oMatchesSelector) isMatching=element.oMatchesSelector(selector)
-									else if(element.msMatchesSelector) isMatching=element.msMatchesSelector(selector)
-									else if(element.mozMatchesSelector) isMatching=element.mozMatchesSelector(selector)
-									else if(element.webkitMatchesSelector) isMatching=element.webkitMatchesSelector(selector)
-									else { throw new Error("no element.matches?") }
-								} catch(ex) { debugger; setImmediate(function() { throw ex; }) }
-								
-								// if yes, add it to the list of matched selectors
-								if(isMatching) { results.push(subrules[sr]); }
-								
-							}
-							
-						} else if(rule instanceof cssSyntax.AtRule && rule.name=="media") {
-							
-							// visit them
-							visit(rule.toStylesheet().value);
-							
-						}
-						
-					}
-				} catch (ex) {
-					setImmediate(function() { throw ex; });
-				}
-			}
-			
-			for(var s=cssCascade.stylesheets.length; s--; ) {
-				var rules = cssCascade.stylesheets[s];
-				visit(rules);
-			}
-			
-			return results;
-		},
-		
-		//
-		// a list of all properties supported by the current browser
-		//
-		allCSSProperties: null,
-		getAllCSSProperties: function getAllCSSProperties() {
-			
-			if(this.allCSSProperties) return this.allCSSProperties;
-			
-			// get all claimed properties
-			var s = getComputedStyle(document.documentElement); var ps = new Array(s.length);
-			for(var i=s.length; i--; ) {
-				ps[i] = s[i];
-			}
-			
-			// FIX A BUG WHERE WEBKIT DOESN'T REPORT ALL PROPERTIES
-			if(ps.indexOf('content')==-1) {ps.push('content');}
-			if(ps.indexOf('counter-reset')==-1) {
-				
-				ps.push('counter-reset');
-				ps.push('counter-increment');
-				
-				// FIX A BUG WHERE WEBKIT RETURNS SHIT FOR THE COMPUTED VALUE OF COUNTER-RESET
-				cssCascade.computationUnsafeProperties['counter-reset']=true;
-				
-			}
-			
-			// save in a cache for faster access the next times
-			return this.allCSSProperties = ps;
-			
-		},
-		
-		// 
-		// those properties are not safe for computation->specified round-tripping
-		// 
-		computationUnsafeProperties: {
-			"bottom"          : true,
-			"direction"       : true,
-			"display"         : true,
-			"font-size"       : true,
-			"height"          : true,
-			"left"            : true,
-			"line-height"     : true,
-			"margin-left"     : true,
-			"margin-right"    : true,
-			"margin-bottom"   : true,
-			"margin-top"      : true,
-			"max-height"      : true,
-			"max-width"       : true,
-			"min-height"      : true,
-			"min-width"       : true,
-			"padding-left"    : true,
-			"padding-right"   : true,
-			"padding-bottom"  : true,
-			"padding-top"     : true,
-			"right"           : true,
-			"text-align"      : true,
-			"text-align-last" : true,
-			"top"             : true,
-			"width"           : true,
-			__proto__         : null,
-		},
-		
-		//
-		// a list of property we should inherit...
-		//
-		inheritingProperties: {
-			"border-collapse"       : true,
-			"border-spacing"        : true,
-			"caption-side"          : true,
-			"color"                 : true,
-			"cursor"                : true,
-			"direction"             : true,
-			"empty-cells"           : true,
-			"font-family"           : true,
-			"font-size"             : true,
-			"font-style"            : true,
-			"font-variant"          : true,
-			"font-weight"           : true,
-			"font"                  : true,
-			"letter-spacing"        : true,
-			"line-height"           : true,
-			"list-style-image"      : true,
-			"list-style-position"   : true,
-			"list-style-type"       : true,
-			"list-style"            : true,
-			"orphans"               : true,
-			"quotes"                : true,
-			"text-align"            : true,
-			"text-indent"           : true,
-			"text-transform"        : true,
-			"visibility"            : true,
-			"white-space"           : true,
-			"widows"                : true,
-			"word-break"            : true,
-			"word-spacing"          : true,
-			"word-wrap"             : true,
-			__proto__               : null,
-		},
-		
-		//
-		// returns the default style for a tag
-		//
-		defaultStylesForTag: Object.create ? Object.create(null) : {},
-		getDefaultStyleForTag: function getDefaultStyleForTag(tagName) {
-			
-			// get result from cache
-			var result = this.defaultStylesForTag[tagName];
-			if(result) return result;
-			
-			// create dummy virtual element
-			var element = document.createElement(tagName);
-			var style = this.defaultStylesForTag[tagName] = getComputedStyle(element);
-			if(style.display) return style;
-			
-			// webkit fix: insert the dummy element anywhere (head -> display:none)
-			document.head.insertBefore(element, document.head.firstChild);
-			return style;
-		},
-		
-		// 
-		// returns the specified style of an element. 
-		// REMARK: may or may not unwrap "inherit" and "initial" depending on implementation
-		// REMARK: giving "matchedRules" as a parameter allow you to mutualize the "findAllMatching" rules calls
-		// 
-		getSpecifiedStyle: function getSpecifiedStyle(element, cssPropertyName, matchedRules) {
-			
-			// hook for css regions
-			var fragmentSource;
-			if(fragmentSource=element.getAttribute('data-css-regions-fragment-of')) {
-				fragmentSource = document.querySelector('[data-css-regions-fragment-source="'+fragmentSource+'"]');
-				if(fragmentSource) return cssCascade.getSpecifiedStyle(fragmentSource, cssPropertyName);
-			}
-			
-			// give IE a thumbs up for this!
-			if(element.currentStyle && !window.opera) {
-				
-				// ask IE to manage the style himself...
-				var bestValue = element.myStyle[cssPropertyName] || element.currentStyle[cssPropertyName] || '';
-				
-				// return a parsed representation of the value
-				return cssSyntax.parseAListOfComponentValues(bestValue);
-				
-			} else {
-				
-				// TODO: support the "initial" and "inherit" things?
-				
-				// first, let's try inline style as it's fast and generally accurate
-				// TODO: what if important rules override that?
-				try {
-					if(bestValue = element.style.getPropertyValue(cssPropertyName) || element.myStyle[cssPropertyName]) {
-						return cssSyntax.parseAListOfComponentValues(bestValue);
-					}
-				} catch(ex) {}
-				
-				// find all relevant style rules
-				var isBestImportant=false; var bestPriority = 0; var bestValue = new cssSyntax.TokenList();
-				var rules = matchedRules || (
-					cssPropertyName in cssCascade.monitoredProperties
-					? element.myMatchedRules || []
-					: cssCascade.findAllMatchingRules(element)
-				);
-				
-				var visit = function(rules) {
-					
-					for(var i=rules.length; i--; ) {
-						
-						// media queries hook
-						if(rules[i].disabled) continue;
-						
-						// find a relevant declaration
-						if(rules[i] instanceof cssSyntax.StyleRule) {
-							var decls = rules[i].getDeclarations();
-							for(var j=decls.length-1; j>=0; j--) {
-								if(decls[j].type=="DECLARATION") {
-									if(decls[j].name==cssPropertyName) {
-										// only works if selectors containing a "," are deduplicated
-										var currentPriority = cssCascade.computeSelectorPriorityOf(rules[i].selector);
-										
-										if(isBestImportant) {
-											// only an important declaration can beat another important declaration
-											if(decls[j].important) {
-												if(currentPriority >= bestPriority) {
-													bestPriority = currentPriority;
-													bestValue = decls[j].value;
-												}
-											}
-										} else {
-											// an important declaration beats any non-important declaration
-											if(decls[j].important) {
-												isBestImportant = true;
-												bestPriority = currentPriority;
-												bestValue = decls[j].value;
-											} else {
-												// the selector priority has to be higher otherwise
-												if(currentPriority >= bestPriority) {
-													bestPriority = currentPriority;
-													bestValue = decls[j].value;
-												}
-											}
-										}
-									}
-								}
-							}
-						} else if((rules[i] instanceof cssSyntax.AtRule) && (rules[i].name=="media")) {
-							
-							// visit them
-							visit(rules[i].toStylesheet())
-							
-						}
-						
-					}
-					
-				}
-				visit(rules);
-				
-				// return our best guess...
-				return bestValue||null;
-				
-			}
-			
-		},
-		
-		
-		//
-		// start monitoring a new stylesheet
-		// (should usually not be used because stylesheets load automatically)
-		//
-		stylesheets: [],
-		loadStyleSheet: function loadStyleSheet(cssText,i) {
-			
-			// load in order
-			
-			// parse the stylesheet content
-			var rules = cssSyntax.parse(cssText).value;
-			
-			// add the stylesheet into the object model
-			if(typeof(i)!=="undefined") { cssCascade.stylesheets[i]=rules; } 
-			else { i=cssCascade.stylesheets.push(rules);}
-			
-			// make sure to monitor the required rules
-			cssCascade.startMonitoringStylesheet(rules)
-			
-		},
-		
-		//
-		// start monitoring a new stylesheet
-		// (should usually not be used because stylesheets load automatically)
-		//
-		loadStyleSheetTag: function loadStyleSheetTag(stylesheet,i) {
-			
-			if(stylesheet.hasAttribute('data-css-polyfilled')) {
-				return;
-			}
-			
-			if(stylesheet.tagName=='LINK') {
-				
-				// oh, no, we have to download it...
-				try {
-					
-					// dummy value in-between
-					cssCascade.stylesheets[i] = new cssSyntax.TokenList();
-					
-					//
-					var xhr = new XMLHttpRequest(); xhr.href = stylesheet.href;
-					xhr.open('GET',stylesheet.href,true); xhr.ruleIndex = i; 
-					xhr.onreadystatechange = function() {
-						if(this.readyState==4) { 
-							
-							// status 0 is a webkit bug for local files
-							if(this.status==200||this.status==0) {
-								cssCascade.loadStyleSheet(this.responseText,this.ruleIndex)
-							} else {
-								cssConsole.log("css-cascade polyfill failled to load: " + this.href);
-							}
-						}
-					};
-					xhr.send();
-					
-				} catch(ex) {
-					cssConsole.log("css-cascade polyfill failled to load: " + stylesheet.href);
-				}
-				
-			} else {
-				
-				// oh, cool, we just have to parse the content!
-				cssCascade.loadStyleSheet(stylesheet.textContent,i);
-				
-			}
-			
-			// mark the stylesheet as ok
-			stylesheet.setAttribute('data-css-polyfilled',true);
-			
-		},
-		
-		//
-		// calling this function will load all currently existing stylesheets in the document
-		// (should usually not be used because stylesheets load automatically)
-		//
-		selectorForStylesheets: "style:not([data-no-css-polyfill]):not([data-css-polyfilled]), link[rel=stylesheet]:not([data-no-css-polyfill]):not([data-css-polyfilled])",
-		loadAllStyleSheets: function loadAllStyleSheets() {
-			
-			// for all stylesheets in the <head> tag...
-			var head = document.head || document.documentElement;
-			var stylesheets = head.querySelectorAll(cssCascade.selectorForStylesheets);
-			
-			var intialLength = this.stylesheets.length;
-			this.stylesheets.length += stylesheets.length
-			
-			// for all of them...
-			for(var i = stylesheets.length; i--;) {
-				
-				// 
-				// load the stylesheet
-				// 
-				var stylesheet = stylesheets[i]; 
-				cssCascade.loadStyleSheetTag(stylesheet,intialLength+i)
-				
-			}
-		},
-		
-		//
-		// this is where we store event handlers for monitored properties
-		//
-		monitoredProperties: Object.create ? Object.create(null) : {},
-		monitoredPropertiesHandler: {
-			onupdate: function(element, rule) {
-				
-				// we need to find all regexps that matches
-				var mps = cssCascade.monitoredProperties;
-				var decls = rule.getDeclarations();
-				for(var j=decls.length-1; j>=0; j--) {
-					if(decls[j].type=="DECLARATION") {
-						if(decls[j].name in mps) {
-							
-							// call all handlers waiting for this
-							var hs = mps[decls[j].name];
-							for(var hi=hs.length; hi--;) {
-								hs[hi].onupdate(element,rule);
-							};
-							
-							// don't call twice
-							break;
-							
-						}
-					}
-				}
-				
-			}
-		},
-		
-		//
-		// add an handler to some properties (aka fire when their value *MAY* be affected)
-		// REMARK: because this event does not promise the value changed, you may want to figure it out before relayouting
-		//
-		startMonitoringProperties: function startMonitoringProperties(properties, handler) {
-			
-			for(var i=properties.length; i--; ) {
-				var property = properties[i];
-				var handlers = (
-					cssCascade.monitoredProperties[property]
-					|| (cssCascade.monitoredProperties[property] = [])
-				);
-				handlers.push(handler)
-			}
-			
-			for(var s=0; s<cssCascade.stylesheets.length; s++) {
-				var currentStylesheet = cssCascade.stylesheets[s];
-				cssCascade.startMonitoringStylesheet(currentStylesheet);
-			}
-			
-		},
-		
-		//
-		// calling this function will detect monitored rules in the stylesheet
-		// (should usually not be used because stylesheets load automatically)
-		//
-		startMonitoringStylesheet: function startMonitoringStylesheet(rules) {
-			for(var i=0; i<rules.length; i++) {
-				
-				// only consider style rules
-				if(rules[i] instanceof cssSyntax.StyleRule) {
-					
-					// try to see if the current rule is worth monitoring
-					if(rules[i].isMonitored) continue;
-					
-					// for that, let's see if we can find a declaration we should watch
-					var decls = rules[i].getDeclarations();
-					for(var j=decls.length-1; j>=0; j--) {
-						if(decls[j].type=="DECLARATION") {
-							if(decls[j].name in cssCascade.monitoredProperties) {
-								
-								// if we found some, start monitoring
-								cssCascade.startMonitoringRule(rules[i]);
-								break;
-								
-							}
-						}
-					}
-					
-				} else if(rules[i] instanceof cssSyntax.AtRule) {
-					
-					// handle @media
-					if(rules[i].name == "media" && window.matchMedia) {
-						
-						cssCascade.startMonitoringMedia(rules[i]);
-						
-					}
-					
-				}
-				
-			}
-		},
-		
-		//
-		// calling this function will detect media query updates and fire events accordingly
-		// (should usually not be used because stylesheets load automatically)
-		//
-		startMonitoringMedia: function startMonitoringMedia(atrule) {
-			try {
-				
-				var media = window.matchMedia(atrule.prelude.toCSSString());
-				
-				// update all the rules when needed
-				var rules = atrule.toStylesheet().value;
-				cssCascade.updateMedia(rules, !media.matches, false);
-				media.addListener(
-					function(newMedia) { cssCascade.updateMedia(rules, !newMedia.matches, true); }
-				);
-				
-				// it seems I like taking risks...
-				cssCascade.startMonitoringStylesheet(rules);
-				
-			} catch(ex) {
-				setImmediate(function() { throw ex; })
-			}
-		},
-		
-		//
-		// define what happens when a media query status changes
-		//
-		updateMedia: function(rules,disabled,update) {
-			for(var i=rules.length; i--; ) {
-				rules[i].disabled = disabled;
-				// TODO: should probably get handled by a setter on the rule...
-				var sr = rules[i].subRules;
-				if(sr) {
-					for(var j=sr.length; j--; ) {
-						sr[j].disabled = disabled;
-					}
-				}
-			}
-			
-			// in case of update, all elements matching the selector went potentially updated...
-			if(update) {
-				for(var i=rules.length; i--; ) {
-					var els = document.querySelectorAll(rules[i].selector.toCSSString());
-					for(var j=els.length; j--; ) {
-						cssCascade.monitoredPropertiesHandler.onupdate(els[j],rules[i]);
-					}
-				}
-			}
-		},
-		
-		// 
-		// splits a rule if it has multiple selectors
-		// 
-		splitRule: function splitRule(rule) {
-			
-			// create an array for all the subrules
-			var rules = [];
-			
-			// fill the array
-			var currentRule = new cssSyntax.StyleRule(); currentRule.disabled=rule.disabled;
-			for(var i=0; i<rule.selector.length; i++) {
-				if(rule.selector[i] instanceof cssSyntax.DelimToken && rule.selector[i].value==",") {
-					currentRule.value = rule.value; rules.push(currentRule);
-					currentRule = new cssSyntax.StyleRule(); currentRule.disabled=rule.disabled;
-				} else {
-					currentRule.selector.push(rule.selector[i])
-				}
-			}
-			currentRule.value = rule.value; rules.push(currentRule);
-			
-			// save the result of the split as subrules
-			return rule.subRules = rules;
-			
-		},
-		
-		// 
-		// ask the css-selector implementation to notify changes for the rules
-		// 
-		startMonitoringRule: function startMonitoringRule(rule) {
-			
-			// avoid monitoring rules twice
-			if(!rule.isMonitored) { rule.isMonitored=true } else { return; }
-			
-			// split the rule if it has multiple selectors
-			var rules = rule.subRules || cssCascade.splitRule(rule);
-			
-			// monitor the rules
-			for(var i=0; i<rules.length; i++) {
-				rule = rules[i];
-				querySelectorLive(rule.selector.toCSSString(), {
-					onadded: function(e) {
-						
-						// add the rule to the matching list of this element
-						(e.myMatchedRules = e.myMatchedRules || []).unshift(rule); // TODO: does not respect priority order
-						
-						// generate an update event
-						cssCascade.monitoredPropertiesHandler.onupdate(e, rule);
-						
-					},
-					onremoved: function(e) {
-						
-						// remove the rule from the matching list of this element
-						if(e.myMatchedRules) e.myMatchedRules.splice(e.myMatchedRules.indexOf(rule), 1);
-						
-						// generate an update event
-						cssCascade.monitoredPropertiesHandler.onupdate(e, rule);
-						
-					}
-				});
-			}
-			
-		},
-		
-		//
-		// converts a css property name to a javascript name
-		//
-		toCamelCase: function toCamelCase(variable) { 
-			return variable.replace(
-				/-([a-z])/g, 
-				function(str,letter) { 
-					return letter.toUpperCase();
-				}
-			);
-		},
-		
-		//
-		// add some magic code to support properties on the style interface
-		//
-		polyfillStyleInterface: function(cssPropertyName) {
-			
-			var prop = {
-				
-				get: function() {
-					
-					// check we know which element we work on
-					try { if(!this.parentElement) throw new Error("Please use the anHTMLElement.myStyle property to get polyfilled properties") }
-					catch(ex) { setImmediate(function() { throw ex; }); return ''; }
-					
-					try { 
-						// non-computed style: return the local style of the element
-						this.clip = (this.clip===undefined?'':this.clip);
-						return this.parentElement.getAttribute('data-style-'+cssPropertyName);
-					} catch (ex) {
-						// computed style: return the specified style of the element
-						var value = cssCascade.getSpecifiedStyle(this.parentElement, cssPropertyName, undefined, true);
-						return value && value.length>0 ? value.toCSSString() : '';
-					}
-					
-				},
-				
-				set: function(v) {
-					
-					// check that the style is writable
-					this.clip = (this.clip===undefined?'':this.clip);
+module.exports = (function(window, document) {
+  'use strict'
 
-					// check we know which element we work on
-					try { if(!this.parentElement) throw new Error("Please use the anHTMLElement.myStyle property to set polyfilled properties") }
-					catch(ex) { setImmediate(function() { throw ex; }); return; }
-					
-					// modify the local style of the element
-					if(this.parentElement.getAttribute('data-style-'+cssPropertyName) != v) {
-						this.parentElement.setAttribute('data-style-'+cssPropertyName,v);
-					}
-					
-				}
-				
-			};
-			
-			var styleProtos = [];
-			try { styleProtos.push(Object.getPrototypeOf(document.documentElement.style) || CSSStyleDeclaration); } catch (ex) {}
-			//try { styleProtos.push(Object.getPrototypeOf(getComputedStyle(document.documentElement))); } catch (ex) {}
-			//try { styleProtos.push(Object.getPrototypeOf(document.documentElement.currentStyle)); } catch (ex) {}
-			//try { styleProtos.push(Object.getPrototypeOf(document.documentElement.runtimeStyle)); } catch (ex) {}
-			//try { styleProtos.push(Object.getPrototypeOf(document.documentElement.specifiedStyle)); } catch (ex) {}
-			//try { styleProtos.push(Object.getPrototypeOf(document.documentElement.cascadedStyle)); } catch (ex) {}
-			//try { styleProtos.push(Object.getPrototypeOf(document.documentElement.usedStyle)); } catch (ex) {}
-			
-			for(var i = styleProtos.length; i--;) {
-				var styleProto = styleProtos[i];
-				Object.defineProperty(styleProto,cssPropertyName,prop);
-				Object.defineProperty(styleProto,cssCascade.toCamelCase(cssPropertyName),prop);
-			}
-			cssCascade.startMonitoringRule(cssSyntax.parse('[style*="'+cssPropertyName+'"]{'+cssPropertyName+':attr(style)}').value[0]);
-			cssCascade.startMonitoringRule(cssSyntax.parse('[data-style-'+cssPropertyName+']{'+cssPropertyName+':attr(style)}').value[0]);
-			
-			// add to the list of polyfilled properties...
-			cssCascade.getAllCSSProperties().push(cssPropertyName);
-			cssCascade.computationUnsafeProperties[cssPropertyName] = true;
-			
-		}
-		
-	};
+  // import dependencies
+  require('src/core/polyfill-dom-console.js')
+  require('src/core/polyfill-dom-requestAnimationFrame.js')
+  var cssSyntax = require('src/core/css-syntax.js')
+  var domEvents = require('src/core/dom-events.js')
+  var querySelectorLive = require('src/core/dom-query-selector-live.js')
 
-	//
-	// polyfill for browsers not support CSSStyleDeclaration.parentElement (all of them right now)
-	//
-	domEvents.EventTarget.implementsIn(cssCascade);
-	Object.defineProperty(Element.prototype,'myStyle',{
-		get: function() {
-			var style = this.style; 
-			if(!style.parentElement) style.parentElement = this;
-			return style;
-		}
-	});
+  // define the module
+  var cssCascade = {
+    //
+    // returns the priority of a unique selector (NO COMMA!)
+    // { the return value is an integer, with the same formula as webkit }
+    //
+    computeSelectorPriorityOf: function computeSelectorPriorityOf(selector) {
+      if (typeof selector == 'string')
+        selector = cssSyntax.parse(selector.trim() + '{}').value[0].selector
 
-	//
-	// load all stylesheets at the time the script is loaded
-	// then do it again when all stylesheets are downloaded
-	// and again if some style tag is added to the DOM
-	//
-	if(!("no_auto_stylesheet_detection" in window)) {
-		
-		cssCascade.loadAllStyleSheets();
-		document.addEventListener("DOMContentLoaded", function() {
-			cssCascade.loadAllStyleSheets();
-			querySelectorLive(
-				cssCascade.selectorForStylesheets,
-				{
-					onadded: function(e) {
-						// TODO: respect DOM order?
-						cssCascade.loadStyleSheetTag(e);
-						cssCascade.dispatchEvent('stylesheetadded');
-					}
-				}
-			)
-		})
-	}
-	
-	return cssCascade;
+      var numberOfIDs = 0
+      var numberOfClasses = 0
+      var numberOfTags = 0
 
-})(window, document);
+      // TODO: improve this parser, or find one on the web
+      for (var i = 0; i < selector.length; i++) {
+        if (selector[i] instanceof cssSyntax.IdentifierToken) {
+          numberOfTags++
+        } else if (selector[i] instanceof cssSyntax.DelimToken) {
+          if (selector[i].value == '.') {
+            numberOfClasses++
+            i++
+          }
+        } else if (selector[i] instanceof cssSyntax.ColonToken) {
+          if (selector[++i] instanceof cssSyntax.ColonToken) {
+            numberOfTags++
+            i++
+          } else if (
+            selector[i] instanceof cssSyntax.Func &&
+            /^(not|matches)$/i.test(selector[i].name)
+          ) {
+            var nestedPriority = this.computeSelectorPriorityOf(selector[i].value)
+            numberOfTags += nestedPriority % 256
+            nestedPriority /= 256
+            numberOfClasses += nestedPriority % 256
+            nestedPriority /= 256
+            numberOfIDs += nestedPriority
+          } else {
+            numberOfClasses++
+          }
+        } else if (selector[i] instanceof cssSyntax.SimpleBlock) {
+          if (selector[i].name == '[') {
+            numberOfClasses++
+          }
+        } else if (selector[i] instanceof cssSyntax.HashToken) {
+          numberOfIDs++
+        } else {
+          // TODO: stop ignoring unknown symbols?
+        }
+      }
+
+      if (numberOfIDs > 255) numberOfIDs = 255
+      if (numberOfClasses > 255) numberOfClasses = 255
+      if (numberOfTags > 255) numberOfTags = 255
+
+      return (numberOfIDs * 256 + numberOfClasses) * 256 + numberOfTags
+    },
+
+    //
+    // returns an array of the css rules matching an element
+    //
+    findAllMatchingRules: function findAllMatchingRules(element) {
+      return this.findAllMatchingRulesWithPseudo(element)
+    },
+
+    //
+    // returns an array of the css rules matching a pseudo-element
+    //
+    findAllMatchingRulesWithPseudo: function findAllMatchingRules(element, pseudo) {
+      pseudo = pseudo ? ('' + pseudo).toLowerCase() : pseudo
+
+      // let's look for new results if needed...
+      var results = []
+
+      // walk the whole stylesheet...
+      var visit = function(rules) {
+        try {
+          for (var r = rules.length; r--; ) {
+            var rule = rules[r]
+
+            // media queries hook
+            if (rule.disabled) continue
+
+            if (rule instanceof cssSyntax.StyleRule) {
+              // consider each selector independently
+              var subrules = rule.subRules || cssCascade.splitRule(rule)
+              for (var sr = subrules.length; sr--; ) {
+                var selector = subrules[sr].selector
+                  .toCSSString()
+                  .replace(/ *(\/\*\*\/|  ) */g, ' ')
+                  .trim()
+                if (pseudo) {
+                  // WE ONLY ACCEPT SELECTORS ENDING WITH THE PSEUDO
+                  var selectorLow = selector.toLowerCase()
+                  var newLength = selector.length - pseudo.length - 1
+                  if (newLength <= 0) continue
+
+                  if (selectorLow.lastIndexOf('::' + pseudo) == newLength - 1) {
+                    selector = selector.substr(0, newLength - 1)
+                  } else if (selectorLow.lastIndexOf(':' + pseudo) == newLength) {
+                    selector = selector.substr(0, newLength)
+                  } else {
+                    continue
+                  }
+
+                  // fix selectors like "#element > :first-child ~ ::before"
+                  if (selector.trim().length == 0) {
+                    selector = '*'
+                  } else if (selector[selector.length - 1] == ' ') {
+                    selector += '*'
+                  } else if (selector[selector.length - 1] == '+') {
+                    selector += '*'
+                  } else if (selector[selector.length - 1] == '>') {
+                    selector += '*'
+                  } else if (selector[selector.length - 1] == '~') {
+                    selector += '*'
+                  }
+                }
+
+                // look if the selector matches
+                var isMatching = false
+                try {
+                  if (element.matches) isMatching = element.matches(selector)
+                  else if (element.matchesSelector) isMatching = element.matchesSelector(selector)
+                  else if (element.oMatchesSelector) isMatching = element.oMatchesSelector(selector)
+                  else if (element.msMatchesSelector)
+                    isMatching = element.msMatchesSelector(selector)
+                  else if (element.mozMatchesSelector)
+                    isMatching = element.mozMatchesSelector(selector)
+                  else if (element.webkitMatchesSelector)
+                    isMatching = element.webkitMatchesSelector(selector)
+                  else {
+                    throw new Error('no element.matches?')
+                  }
+                } catch (ex) {
+                  // debugger
+                  // setImmediate(function() {
+                  //   throw ex
+                  // })
+                }
+
+                // if yes, add it to the list of matched selectors
+                if (isMatching) {
+                  results.push(subrules[sr])
+                }
+              }
+            } else if (rule instanceof cssSyntax.AtRule && rule.name == 'media') {
+              // visit them
+              visit(rule.toStylesheet().value)
+            }
+          }
+        } catch (ex) {
+          // setImmediate(function() {
+          //   throw ex
+          // })
+        }
+      }
+
+      for (var s = cssCascade.stylesheets.length; s--; ) {
+        var rules = cssCascade.stylesheets[s]
+        visit(rules)
+      }
+
+      return results
+    },
+
+    //
+    // a list of all properties supported by the current browser
+    //
+    allCSSProperties: null,
+    getAllCSSProperties: function getAllCSSProperties() {
+      if (this.allCSSProperties) return this.allCSSProperties
+
+      // get all claimed properties
+      var s = getComputedStyle(document.documentElement)
+      var ps = new Array(s.length)
+      for (var i = s.length; i--; ) {
+        ps[i] = s[i]
+      }
+
+      // FIX A BUG WHERE WEBKIT DOESN'T REPORT ALL PROPERTIES
+      if (ps.indexOf('content') == -1) {
+        ps.push('content')
+      }
+      if (ps.indexOf('counter-reset') == -1) {
+        ps.push('counter-reset')
+        ps.push('counter-increment')
+
+        // FIX A BUG WHERE WEBKIT RETURNS SHIT FOR THE COMPUTED VALUE OF COUNTER-RESET
+        cssCascade.computationUnsafeProperties['counter-reset'] = true
+      }
+
+      // save in a cache for faster access the next times
+      return (this.allCSSProperties = ps)
+    },
+
+    //
+    // those properties are not safe for computation->specified round-tripping
+    //
+    computationUnsafeProperties: {
+      bottom: true,
+      direction: true,
+      display: true,
+      'font-size': true,
+      height: true,
+      left: true,
+      'line-height': true,
+      'margin-left': true,
+      'margin-right': true,
+      'margin-bottom': true,
+      'margin-top': true,
+      'max-height': true,
+      'max-width': true,
+      'min-height': true,
+      'min-width': true,
+      'padding-left': true,
+      'padding-right': true,
+      'padding-bottom': true,
+      'padding-top': true,
+      right: true,
+      'text-align': true,
+      'text-align-last': true,
+      top: true,
+      width: true,
+      __proto__: null
+    },
+
+    //
+    // a list of property we should inherit...
+    //
+    inheritingProperties: {
+      'border-collapse': true,
+      'border-spacing': true,
+      'caption-side': true,
+      color: true,
+      cursor: true,
+      direction: true,
+      'empty-cells': true,
+      'font-family': true,
+      'font-size': true,
+      'font-style': true,
+      'font-variant': true,
+      'font-weight': true,
+      font: true,
+      'letter-spacing': true,
+      'line-height': true,
+      'list-style-image': true,
+      'list-style-position': true,
+      'list-style-type': true,
+      'list-style': true,
+      orphans: true,
+      quotes: true,
+      'text-align': true,
+      'text-indent': true,
+      'text-transform': true,
+      visibility: true,
+      'white-space': true,
+      widows: true,
+      'word-break': true,
+      'word-spacing': true,
+      'word-wrap': true,
+      __proto__: null
+    },
+
+    //
+    // returns the default style for a tag
+    //
+    defaultStylesForTag: Object.create ? Object.create(null) : {},
+    getDefaultStyleForTag: function getDefaultStyleForTag(tagName) {
+      // get result from cache
+      var result = this.defaultStylesForTag[tagName]
+      if (result) return result
+
+      // create dummy virtual element
+      var element = document.createElement(tagName)
+      var style = (this.defaultStylesForTag[tagName] = getComputedStyle(element))
+      if (style.display) return style
+
+      // webkit fix: insert the dummy element anywhere (head -> display:none)
+      document.head.insertBefore(element, document.head.firstChild)
+      return style
+    },
+
+    //
+    // returns the specified style of an element.
+    // REMARK: may or may not unwrap "inherit" and "initial" depending on implementation
+    // REMARK: giving "matchedRules" as a parameter allow you to mutualize the "findAllMatching" rules calls
+    //
+    getSpecifiedStyle: function getSpecifiedStyle(element, cssPropertyName, matchedRules) {
+      // hook for css regions
+      var fragmentSource
+      if ((fragmentSource = element.getAttribute('data-css-regions-fragment-of'))) {
+        fragmentSource = document.querySelector(
+          '[data-css-regions-fragment-source="' + fragmentSource + '"]'
+        )
+        if (fragmentSource) return cssCascade.getSpecifiedStyle(fragmentSource, cssPropertyName)
+      }
+
+      // give IE a thumbs up for this!
+      if (element.currentStyle && !window.opera) {
+        // ask IE to manage the style himself...
+        var bestValue =
+          element.myStyle[cssPropertyName] || element.currentStyle[cssPropertyName] || ''
+
+        // return a parsed representation of the value
+        return cssSyntax.parseAListOfComponentValues(bestValue)
+      } else {
+        // TODO: support the "initial" and "inherit" things?
+
+        // first, let's try inline style as it's fast and generally accurate
+        // TODO: what if important rules override that?
+        try {
+          if (
+            (bestValue =
+              element.style.getPropertyValue(cssPropertyName) || element.myStyle[cssPropertyName])
+          ) {
+            return cssSyntax.parseAListOfComponentValues(bestValue)
+          }
+        } catch (ex) {}
+
+        // find all relevant style rules
+        var isBestImportant = false
+        var bestPriority = 0
+        var bestValue = new cssSyntax.TokenList()
+        var rules =
+          matchedRules ||
+          (cssPropertyName in cssCascade.monitoredProperties
+            ? element.myMatchedRules || []
+            : cssCascade.findAllMatchingRules(element))
+
+        var visit = function(rules) {
+          for (var i = rules.length; i--; ) {
+            // media queries hook
+            if (rules[i].disabled) continue
+
+            // find a relevant declaration
+            if (rules[i] instanceof cssSyntax.StyleRule) {
+              var decls = rules[i].getDeclarations()
+              for (var j = decls.length - 1; j >= 0; j--) {
+                if (decls[j].type == 'DECLARATION') {
+                  if (decls[j].name == cssPropertyName) {
+                    // only works if selectors containing a "," are deduplicated
+                    var currentPriority = cssCascade.computeSelectorPriorityOf(rules[i].selector)
+
+                    if (isBestImportant) {
+                      // only an important declaration can beat another important declaration
+                      if (decls[j].important) {
+                        if (currentPriority >= bestPriority) {
+                          bestPriority = currentPriority
+                          bestValue = decls[j].value
+                        }
+                      }
+                    } else {
+                      // an important declaration beats any non-important declaration
+                      if (decls[j].important) {
+                        isBestImportant = true
+                        bestPriority = currentPriority
+                        bestValue = decls[j].value
+                      } else {
+                        // the selector priority has to be higher otherwise
+                        if (currentPriority >= bestPriority) {
+                          bestPriority = currentPriority
+                          bestValue = decls[j].value
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            } else if (rules[i] instanceof cssSyntax.AtRule && rules[i].name == 'media') {
+              // visit them
+              visit(rules[i].toStylesheet())
+            }
+          }
+        }
+        visit(rules)
+
+        // return our best guess...
+        return bestValue || null
+      }
+    },
+
+    //
+    // start monitoring a new stylesheet
+    // (should usually not be used because stylesheets load automatically)
+    //
+    stylesheets: [],
+    loadStyleSheet: function loadStyleSheet(cssText, i) {
+      // load in order
+
+      // parse the stylesheet content
+      var rules = cssSyntax.parse(cssText).value
+
+      // add the stylesheet into the object model
+      if (typeof i !== 'undefined') {
+        cssCascade.stylesheets[i] = rules
+      } else {
+        i = cssCascade.stylesheets.push(rules)
+      }
+
+      // make sure to monitor the required rules
+      cssCascade.startMonitoringStylesheet(rules)
+    },
+
+    //
+    // start monitoring a new stylesheet
+    // (should usually not be used because stylesheets load automatically)
+    //
+    loadStyleSheetTag: function loadStyleSheetTag(stylesheet, i) {
+      if (stylesheet.hasAttribute('data-css-polyfilled')) {
+        return
+      }
+
+      if (stylesheet.tagName == 'LINK') {
+        // oh, no, we have to download it...
+        try {
+          // dummy value in-between
+          cssCascade.stylesheets[i] = new cssSyntax.TokenList()
+
+          //
+          var xhr = new XMLHttpRequest()
+          xhr.href = stylesheet.href
+          xhr.open('GET', stylesheet.href, true)
+          xhr.ruleIndex = i
+          xhr.onreadystatechange = function() {
+            if (this.readyState == 4) {
+              // status 0 is a webkit bug for local files
+              if (this.status == 200 || this.status == 0) {
+                cssCascade.loadStyleSheet(this.responseText, this.ruleIndex)
+              } else {
+                cssConsole.log('css-cascade polyfill failled to load: ' + this.href)
+              }
+            }
+          }
+          xhr.send()
+        } catch (ex) {
+          cssConsole.log('css-cascade polyfill failled to load: ' + stylesheet.href)
+        }
+      } else {
+        // oh, cool, we just have to parse the content!
+        cssCascade.loadStyleSheet(stylesheet.textContent, i)
+      }
+
+      // mark the stylesheet as ok
+      stylesheet.setAttribute('data-css-polyfilled', true)
+    },
+
+    //
+    // calling this function will load all currently existing stylesheets in the document
+    // (should usually not be used because stylesheets load automatically)
+    //
+    selectorForStylesheets:
+      'style:not([data-no-css-polyfill]):not([data-css-polyfilled]), link[rel=stylesheet]:not([data-no-css-polyfill]):not([data-css-polyfilled])',
+    loadAllStyleSheets: function loadAllStyleSheets() {
+      // for all stylesheets in the <head> tag...
+      var head = document.head || document.documentElement
+      var stylesheets = head.querySelectorAll(cssCascade.selectorForStylesheets)
+
+      var intialLength = this.stylesheets.length
+      this.stylesheets.length += stylesheets.length
+
+      // for all of them...
+      for (var i = stylesheets.length; i--; ) {
+        //
+        // load the stylesheet
+        //
+        var stylesheet = stylesheets[i]
+        cssCascade.loadStyleSheetTag(stylesheet, intialLength + i)
+      }
+    },
+
+    //
+    // this is where we store event handlers for monitored properties
+    //
+    monitoredProperties: Object.create ? Object.create(null) : {},
+    monitoredPropertiesHandler: {
+      onupdate: function(element, rule) {
+        // we need to find all regexps that matches
+        var mps = cssCascade.monitoredProperties
+        var decls = rule.getDeclarations()
+        for (var j = decls.length - 1; j >= 0; j--) {
+          if (decls[j].type == 'DECLARATION') {
+            if (decls[j].name in mps) {
+              // call all handlers waiting for this
+              var hs = mps[decls[j].name]
+              for (var hi = hs.length; hi--; ) {
+                hs[hi].onupdate(element, rule)
+              }
+
+              // don't call twice
+              break
+            }
+          }
+        }
+      }
+    },
+
+    //
+    // add an handler to some properties (aka fire when their value *MAY* be affected)
+    // REMARK: because this event does not promise the value changed, you may want to figure it out before relayouting
+    //
+    startMonitoringProperties: function startMonitoringProperties(properties, handler) {
+      for (var i = properties.length; i--; ) {
+        var property = properties[i]
+        var handlers =
+          cssCascade.monitoredProperties[property] ||
+          (cssCascade.monitoredProperties[property] = [])
+        handlers.push(handler)
+      }
+
+      for (var s = 0; s < cssCascade.stylesheets.length; s++) {
+        var currentStylesheet = cssCascade.stylesheets[s]
+        cssCascade.startMonitoringStylesheet(currentStylesheet)
+      }
+    },
+
+    //
+    // calling this function will detect monitored rules in the stylesheet
+    // (should usually not be used because stylesheets load automatically)
+    //
+    startMonitoringStylesheet: function startMonitoringStylesheet(rules) {
+      for (var i = 0; i < rules.length; i++) {
+        // only consider style rules
+        if (rules[i] instanceof cssSyntax.StyleRule) {
+          // try to see if the current rule is worth monitoring
+          if (rules[i].isMonitored) continue
+
+          // for that, let's see if we can find a declaration we should watch
+          var decls = rules[i].getDeclarations()
+          for (var j = decls.length - 1; j >= 0; j--) {
+            if (decls[j].type == 'DECLARATION') {
+              if (decls[j].name in cssCascade.monitoredProperties) {
+                // if we found some, start monitoring
+                cssCascade.startMonitoringRule(rules[i])
+                break
+              }
+            }
+          }
+        } else if (rules[i] instanceof cssSyntax.AtRule) {
+          // handle @media
+          if (rules[i].name == 'media' && window.matchMedia) {
+            cssCascade.startMonitoringMedia(rules[i])
+          }
+        }
+      }
+    },
+
+    //
+    // calling this function will detect media query updates and fire events accordingly
+    // (should usually not be used because stylesheets load automatically)
+    //
+    startMonitoringMedia: function startMonitoringMedia(atrule) {
+      // try {
+      //   var media = window.matchMedia(atrule.prelude.toCSSString())
+      //   // update all the rules when needed
+      //   var rules = atrule.toStylesheet().value
+      //   cssCascade.updateMedia(rules, !media.matches, false)
+      //   media.addListener(function(newMedia) {
+      //     cssCascade.updateMedia(rules, !newMedia.matches, true)
+      //   })
+      //   // it seems I like taking risks...
+      //   cssCascade.startMonitoringStylesheet(rules)
+      // } catch (ex) {
+      //   setImmediate(function() {
+      //     throw ex
+      //   })
+      // }
+    },
+
+    //
+    // define what happens when a media query status changes
+    //
+    updateMedia: function(rules, disabled, update) {
+      for (var i = rules.length; i--; ) {
+        rules[i].disabled = disabled
+        // TODO: should probably get handled by a setter on the rule...
+        var sr = rules[i].subRules
+        if (sr) {
+          for (var j = sr.length; j--; ) {
+            sr[j].disabled = disabled
+          }
+        }
+      }
+
+      // in case of update, all elements matching the selector went potentially updated...
+      if (update) {
+        for (var i = rules.length; i--; ) {
+          var els = document.querySelectorAll(rules[i].selector.toCSSString())
+          for (var j = els.length; j--; ) {
+            cssCascade.monitoredPropertiesHandler.onupdate(els[j], rules[i])
+          }
+        }
+      }
+    },
+
+    //
+    // splits a rule if it has multiple selectors
+    //
+    splitRule: function splitRule(rule) {
+      // create an array for all the subrules
+      var rules = []
+
+      // fill the array
+      var currentRule = new cssSyntax.StyleRule()
+      currentRule.disabled = rule.disabled
+      for (var i = 0; i < rule.selector.length; i++) {
+        if (rule.selector[i] instanceof cssSyntax.DelimToken && rule.selector[i].value == ',') {
+          currentRule.value = rule.value
+          rules.push(currentRule)
+          currentRule = new cssSyntax.StyleRule()
+          currentRule.disabled = rule.disabled
+        } else {
+          currentRule.selector.push(rule.selector[i])
+        }
+      }
+      currentRule.value = rule.value
+      rules.push(currentRule)
+
+      // save the result of the split as subrules
+      return (rule.subRules = rules)
+    },
+
+    //
+    // ask the css-selector implementation to notify changes for the rules
+    //
+    startMonitoringRule: function startMonitoringRule(rule) {
+      // avoid monitoring rules twice
+      if (!rule.isMonitored) {
+        rule.isMonitored = true
+      } else {
+        return
+      }
+
+      // split the rule if it has multiple selectors
+      var rules = rule.subRules || cssCascade.splitRule(rule)
+
+      // monitor the rules
+      for (var i = 0; i < rules.length; i++) {
+        rule = rules[i]
+        querySelectorLive(rule.selector.toCSSString(), {
+          onadded: function(e) {
+            // add the rule to the matching list of this element
+            ;(e.myMatchedRules = e.myMatchedRules || []).unshift(rule) // TODO: does not respect priority order
+
+            // generate an update event
+            cssCascade.monitoredPropertiesHandler.onupdate(e, rule)
+          },
+          onremoved: function(e) {
+            // remove the rule from the matching list of this element
+            if (e.myMatchedRules) e.myMatchedRules.splice(e.myMatchedRules.indexOf(rule), 1)
+
+            // generate an update event
+            cssCascade.monitoredPropertiesHandler.onupdate(e, rule)
+          }
+        })
+      }
+    },
+
+    //
+    // converts a css property name to a javascript name
+    //
+    toCamelCase: function toCamelCase(variable) {
+      return variable.replace(/-([a-z])/g, function(str, letter) {
+        return letter.toUpperCase()
+      })
+    },
+
+    //
+    // add some magic code to support properties on the style interface
+    //
+    polyfillStyleInterface: function(cssPropertyName) {
+      var prop = {
+        get: function() {
+          // check we know which element we work on
+          try {
+            if (!this.parentElement)
+              throw new Error(
+                'Please use the anHTMLElement.myStyle property to get polyfilled properties'
+              )
+          } catch (ex) {
+            setImmediate(function() {
+              throw ex
+            })
+            return ''
+          }
+
+          try {
+            // non-computed style: return the local style of the element
+            this.clip = this.clip === undefined ? '' : this.clip
+            return this.parentElement.getAttribute('data-style-' + cssPropertyName)
+          } catch (ex) {
+            // computed style: return the specified style of the element
+            var value = cssCascade.getSpecifiedStyle(
+              this.parentElement,
+              cssPropertyName,
+              undefined,
+              true
+            )
+            return value && value.length > 0 ? value.toCSSString() : ''
+          }
+        },
+
+        set: function(v) {
+          // check that the style is writable
+          this.clip = this.clip === undefined ? '' : this.clip
+
+          // check we know which element we work on
+          try {
+            if (!this.parentElement)
+              throw new Error(
+                'Please use the anHTMLElement.myStyle property to set polyfilled properties'
+              )
+          } catch (ex) {
+            setImmediate(function() {
+              throw ex
+            })
+            return
+          }
+
+          // modify the local style of the element
+          if (this.parentElement.getAttribute('data-style-' + cssPropertyName) != v) {
+            this.parentElement.setAttribute('data-style-' + cssPropertyName, v)
+          }
+        }
+      }
+
+      var styleProtos = []
+      try {
+        styleProtos.push(
+          Object.getPrototypeOf(document.documentElement.style) || CSSStyleDeclaration
+        )
+      } catch (ex) {}
+      //try { styleProtos.push(Object.getPrototypeOf(getComputedStyle(document.documentElement))); } catch (ex) {}
+      //try { styleProtos.push(Object.getPrototypeOf(document.documentElement.currentStyle)); } catch (ex) {}
+      //try { styleProtos.push(Object.getPrototypeOf(document.documentElement.runtimeStyle)); } catch (ex) {}
+      //try { styleProtos.push(Object.getPrototypeOf(document.documentElement.specifiedStyle)); } catch (ex) {}
+      //try { styleProtos.push(Object.getPrototypeOf(document.documentElement.cascadedStyle)); } catch (ex) {}
+      //try { styleProtos.push(Object.getPrototypeOf(document.documentElement.usedStyle)); } catch (ex) {}
+
+      for (var i = styleProtos.length; i--; ) {
+        var styleProto = styleProtos[i]
+        Object.defineProperty(styleProto, cssPropertyName, prop)
+        Object.defineProperty(styleProto, cssCascade.toCamelCase(cssPropertyName), prop)
+      }
+      cssCascade.startMonitoringRule(
+        cssSyntax.parse('[style*="' + cssPropertyName + '"]{' + cssPropertyName + ':attr(style)}')
+          .value[0]
+      )
+      cssCascade.startMonitoringRule(
+        cssSyntax.parse('[data-style-' + cssPropertyName + ']{' + cssPropertyName + ':attr(style)}')
+          .value[0]
+      )
+
+      // add to the list of polyfilled properties...
+      cssCascade.getAllCSSProperties().push(cssPropertyName)
+      cssCascade.computationUnsafeProperties[cssPropertyName] = true
+    }
+  }
+
+  //
+  // polyfill for browsers not support CSSStyleDeclaration.parentElement (all of them right now)
+  //
+  domEvents.EventTarget.implementsIn(cssCascade)
+  Object.defineProperty(Element.prototype, 'myStyle', {
+    get: function() {
+      var style = this.style
+      if (!style.parentElement) style.parentElement = this
+      return style
+    }
+  })
+
+  //
+  // load all stylesheets at the time the script is loaded
+  // then do it again when all stylesheets are downloaded
+  // and again if some style tag is added to the DOM
+  //
+  if (!('no_auto_stylesheet_detection' in window)) {
+    cssCascade.loadAllStyleSheets()
+    document.addEventListener('DOMContentLoaded', function() {
+      cssCascade.loadAllStyleSheets()
+      querySelectorLive(cssCascade.selectorForStylesheets, {
+        onadded: function(e) {
+          // TODO: respect DOM order?
+          cssCascade.loadStyleSheetTag(e)
+          cssCascade.dispatchEvent('stylesheetadded')
+        }
+      })
+    })
+  }
+
+  return cssCascade
+})(window, document)
 
 require.define('src/core/css-cascade.js');
 
@@ -4021,622 +4014,611 @@ require.define('src/css-regions/lib/range-extensions.js');
 //
 // this module holds the big-picture actions of the polyfill
 //
-module.exports = (function(window, document) { "use strict";
-	
-	var domEvents = require('src/core/dom-events.js');
-	var cssSyntax = require('src/core/css-syntax.js');
-	var cssCascade = require('src/core/css-cascade.js');
-	var cssBreak = require('src/core/css-break.js');
+module.exports = (function(window, document) {
+  'use strict'
 
-	var cssRegionsHelpers = window.cssRegionsHelpers = {
-		
-		//
-		// returns the previous sibling of the element
-		// or the previous sibling of its nearest ancestor that has one
-		//
-		getAllLevelPreviousSibling: function(e, region) {
-			if(!e || e==region) return null;
-			
-			// find the nearest ancestor that has a previous sibling
-			while(!e.previousSibling) {
-				
-				// but bubble to the next avail ancestor
-				e = e.parentNode;
-				
-				// dont get over the bar
-				if(!e || e==region) return null;
-				
-			}
-			
-			// return that sibling
-			return e.previousSibling;
-		},
-		
-		//
-		// prepares the element to become a css region
-		//
-		markNodesAsRegion: function(nodes,fast) {
-			nodes.forEach(function(node) {
-				node.regionOverset = 'empty';
-				node.setAttribute('data-css-region',node.cssRegionsLastFlowFromName);
-				cssRegionsHelpers.hideTextNodesFromFragmentSource([node]);
-				node.cssRegionsWrapper = node.cssRegionsWrapper || node.appendChild(document.createElement("cssregion"));
-			});
-		},
-		
-		//
-		// prepares the element to return to its normal css life
-		//
-		unmarkNodesAsRegion: function(nodes,fast) {
-			nodes.forEach(function(node) {
-				
-				// restore regionOverset to its natural value
-				node.regionOverset = 'fit';
-				
-				// remove the current <cssregion> tag
-				try { node.cssRegionsWrapper && node.removeChild(node.cssRegionsWrapper); } 
-				catch(ex) { setImmediate(function() { throw ex })}; 
-				node.cssRegionsWrapper = undefined;
-				delete node.cssRegionsWrapper;
-				
-				// restore top-level texts that may have been hidden
-				cssRegionsHelpers.unhideTextNodesFromFragmentSource([node]);
-				
-				// unmark as a region
-				node.removeAttribute('data-css-region');
-			});
-		},
-		
-		//
-		// prepares the element for cloning (mainly give them an ID)
-		//
-		fragmentSourceIndex: 0,
-		markNodesAsFragmentSource: function(nodes,ignoreRoot) {
-			
-			function visit(node,k) {
-				var child, next;
-				switch (node.nodeType) {
-					case 1: // Element node
-						
-						if(typeof(k)=="undefined" || !ignoreRoot) {
-							
-							// mark as fragment source
-							var id = node.getAttributeNode('data-css-regions-fragment-source');
-							if(!id) { node.setAttribute('data-css-regions-fragment-source', cssRegionsHelpers.fragmentSourceIndex++); }
-							
-						}
-						
-						node.setAttribute('data-css-regions-cloning', true);
-						
-						// expand list values
-						if(node.tagName=='OL') cssRegionsHelpers.expandListValues(node);
-						if(typeof(k)!="undefined" && node.tagName=="LI") cssRegionsHelpers.expandListValues(node.parentNode);
-						
-					case 9: // Document node
-					case 11: // Document fragment node
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			nodes.forEach(visit);
-			
-		},
-		
-		//
-		// computes the "value" attribute of every LI element out there
-		//
-		expandListValues: function(OL) {
-			if(OL.getAttribute("data-css-li-value-expanded")) return;
-			OL.setAttribute('data-css-li-value-expanded', true);
-			
-			if(OL.hasAttribute("reversed")) {
-				
-				var currentValue = OL.getAttribute("start") ? parseInt(OL.getAttribute("start")) : OL.childElementCount;
-				var increment = -1;
-				
-			} else {
-				
-				var currentValue = OL.getAttribute("start") ? parseInt(OL.getAttribute("start")) : 1;
-				var increment = +1;
-				
-			}
-			
-			var LI = OL.firstElementChild; var LIV = null;
-			while(LI) {
-				if(LI.tagName==="LI") {
-					if(LIV=LI.getAttributeNode("value")) {
-						currentValue = parseInt(LIV.nodeValue);
-						LI.setAttribute('data-css-old-value', currentValue)
-					} else {
-						LI.setAttribute("value", currentValue);
-					}
-					currentValue = currentValue + increment;
-				}
-				LI = LI.nextElementSibling;
-			}
-			
-			
-		},
-		
-		//
-		// reverts to automatic computation of the value of LI elements
-		//
-		unexpandListValues: function(OL) {
-			if(!OL.hasAttribute('data-css-li-value-expanded')) return;
-			OL.removeAttribute('data-css-li-value-expanded')
-			var LI = OL.firstElementChild; var LIV = null;
-			while(LI) {
-				if(LI.tagName==="LI") {
-					if(LIV=LI.getAttributeNode("data-css-old-value")) {
-						LI.removeAttributeNode(LIV);
-					} else {
-						LI.removeAttribute('value');
-					}
-				}
-				LI = LI.nextElementSibling;
-			}
-		},
-		
-		//
-		// makes empty text nodes which cannot get "display: none" applied to them
-		//
-		listOfTextNodesForIE: [],
-		hideTextNodesFromFragmentSource: function(nodes) {
-			
-			function visit(node,k) {
-				var child, next;
-				switch (node.nodeType) {
-					case 3: // Text node
-						
-						if(!node.parentNode.getAttribute('data-css-regions-fragment-source')) {
-							// we have to remove their content the hard way...
-							node.cssRegionsSavedNodeValue = node.nodeValue;
-							node.nodeValue = "";
-							
-							// HACK: OTHERWISE IE WILL GC THE TEXTNODE AND RETURNS YOU
-							// A FRESH TEXTNODE THE NEXT TIME WHERE YOUR EXPANDO
-							// IS NOWHERE TO BE SEEN!
-							if(navigator.userAgent.indexOf('MSIE')>0 || navigator.userAgent.indexOf("Trident")>0) {
-								if(cssRegionsHelpers.listOfTextNodesForIE.indexOf(node)==-1) {
-									cssRegionsHelpers.listOfTextNodesForIE.push(node);
-								}
-							}
-						}
-						
-						break;
-						
-					case 1: // Element node
-						if(node.hasAttribute('data-css-regions-cloning')) {
-							node.removeAttribute('data-css-regions-cloning');
-							node.setAttribute('data-css-regions-cloned', true);
-							if(node.currentStyle) node.currentStyle.display.toString(); // IEFIX FOR BAD STYLE RECALC
-						}
-						if(typeof(k)=="undefined") return;
-						
-					case 9: // Document node
-					case 11: // Document fragment node                    
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			nodes.forEach(visit);
-			
-		},
-		
-		//
-		// makes emptied text nodes visible again
-		//
-		unhideTextNodesFromFragmentSource: function(nodes) {
-			
-			function visit(node) {
-				var child, next;
-				switch (node.nodeType) {
-					case 3: // Text node
-						
-						// we have to remove their content the hard way...
-						if("cssRegionsSavedNodeValue" in node) {
-							node.nodeValue = node.cssRegionsSavedNodeValue;
-							delete node.cssRegionsSavedNodeValue;
-						}
-						
-						break;
-						
-					case 1: // Element node
-						if(typeof(k)=="undefined") return;
-						
-					case 9: // Document node
-					case 11: // Document fragment node                    
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			nodes.forEach(visit);
-			
-		},
-		
-		//
-		// prepares the content elements to return to ther normal css life
-		//
-		unmarkNodesAsFragmentSource: function(nodes) {
-			
-			function visit(node,k) {
-				var child, next;
-				switch (node.nodeType) {
-					case 3: // Text node
-						
-						// we have to reinstall their content the hard way...
-						if("cssRegionsSavedNodeValue" in node) {
-							node.nodeValue = node.cssRegionsSavedNodeValue;
-							delete node.cssRegionsSavedNodeValue;
-						}
-						
-						break;
-					case 1: // Element node
-						node.removeAttribute('data-css-regions-cloned');
-						node.removeAttribute('data-css-regions-fragment-source');
-						if(node.currentStyle) node.currentStyle.display.toString(); // IEFIX FOR BAD STYLE RECALC
-						if(node.tagName=="OL") cssRegionsHelpers.unexpandListValues(node);
-						if(typeof(k)!="undefined" && node.tagName=="LI") cssRegionsHelpers.unexpandListValues(node.parentNode);
-						
-					case 9: // Document node
-					case 11: // Document fragment node
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			nodes.forEach(visit);
-			
-		},
-		
-		//
-		// marks cloned content as fragment instead of as fragment source (basically)
-		//
-		transformFragmentSourceToFragments: function(nodes) {
-			
-			function visit(node) {
-				var child, next;
-				switch (node.nodeType) {
-					case 1: // Element node
-						var id = node.getAttribute('data-css-regions-fragment-source');
-						node.removeAttribute('data-css-regions-fragment-source');
-						node.removeAttribute('data-css-regions-cloning');
-						node.removeAttribute('data-css-regions-cloned');
-						node.setAttribute('data-css-regions-fragment-of', id);
-						if(node.id) node.id += "--fragment";
-						
-					case 9: // Document node
-					case 11: // Document fragment node
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			nodes.forEach(visit);
-			
-		},
-		
-		//
-		// removes some invisible text nodes from the tree
-		// (useful if you don't want to face browser bugs when dealing with them)
-		//
-		embedTrailingWhiteSpaceNodes: function(fragment) {
-			
-			var onlyWhiteSpace = /^\s*$/;
-			function visit(node) {
-				var child, next;
-				switch (node.nodeType) {
-					case 3: // Text node
-						
-						// we only remove nodes at the edges
-						if (!node.previousSibling) {
-							
-							// we only remove nodes if their parent doesn't preserve whitespace
-							if (getComputedStyle(node.parentNode).whiteSpace.substring(0,3)!=="pre") {
-								
-								// only remove pure whitespace nodes
-								if (onlyWhiteSpace.test(node.nodeValue)) {
-									node.parentNode.setAttribute('data-whitespace-before',node.nodeValue);
-									node.parentNode.removeChild(node);
-								}
-								
-							}
-							
-							break;
-						}
-						
-						// we only remove nodes at the edges
-						if (!node.nextSibling) {
-							
-							// we only remove nodes if their parent doesn't preserve whitespace
-							if (getComputedStyle(node.parentNode).whiteSpace.substring(0,3)!=="pre") {
-								
-								// only remove pure whitespace nodes
-								if (onlyWhiteSpace.test(node.nodeValue)) {
-									node.parentNode.setAttribute('data-whitespace-after',node.nodeValue);
-									node.parentNode.removeChild(node);
-								}
-								
-							}
-							
-							break;
-						}
-						
-						break;
-					case 1: // Element node
-					case 9: // Document node
-					case 11: // Document fragment node
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			visit(fragment);
-			
-		},
-		
-		//
-		// recover the previously removed invisible text nodes
-		//
-		unembedTrailingWhiteSpaceNodes: function(fragment) {
-			
-			var onlyWhiteSpace = /^\s*$/;
-			function visit(node) {
-				var child, next;
-				switch (node.nodeType) {
-					case 1: // Element node
-						var txt = "";
-						if(txt = node.getAttribute('data-whitespace-before')) {
-							if(node.getAttribute('data-starting-fragment')=='' && node.getAttribute('data-special-starting-fragment','')) {
-								node.insertBefore(document.createTextNode(txt),node.firstChild);
-							}
-						}
-						node.removeAttribute('data-whitespace-before')
-						if(txt = node.getAttribute('data-whitespace-after')) {
-							if(node.getAttribute('data-continued-fragment')=='' && node.getAttribute('data-special-continued-fragment','')) {
-								node.insertAfter(document.createTextNode(txt),node.lastChild);
-							}
-						}
-						node.removeAttribute('data-whitespace-after')
-						
-					case 9: // Document node
-					case 11: // Document fragment node
-						child = node.firstChild;
-						while (child) {
-							next = child.nextSibling;
-							visit(child);
-							child = next;
-						}
-						break;
-				}
-			}
-			
-			visit(fragment);
-			
-		},
-		
-		///
-		/// walk the two trees the same way, and copy all the styles
-		/// BEWARE: if the DOMs are different, funny things will happen
-		/// NOTE: this function will also remove elements put in another flow
-		///
-		copyStyle: function(root1, root2) {
-			
-			function visit(node1, node2, isRoot) {
-				var child1, next1, child2, next2;
-				switch (node1.nodeType) {
-					case 1: // Element node
-						
-						// firstly, setup a cache of all css properties on the element
-						var matchedRules = (node1.currentStyle && !window.opera) ? undefined : cssCascade.findAllMatchingRules(node1)
-						
-						// and compute the value of all css properties
-						var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties();
-						for(var p=properties.length; p--; ) {
-							
-							// if the property is computation-safe, use the computed value
-							if(!(properties[p] in cssCascade.computationUnsafeProperties) && properties[p][0]!='-') {
-								var style = getComputedStyle(node1).getPropertyValue(properties[p]);
-								var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
-								if(style != defaultStyle) node2.style.setProperty(properties[p], style)
-								continue;
-							}
-							
-							// otherwise, get the element's specified value
-							var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules);
-							if(cssValue && cssValue.length) {
-								
-								// if we have a specified value, let's use it
-								node2.style.setProperty(properties[p], cssValue.toCSSString());
-								
-							} else if(isRoot && node1.parentNode && properties[p][0] != '-') {
-								
-								// NOTE: the root will be detached from its parent
-								// Therefore, we have to inherit styles from it (oh no!)
-								
-								// TODO: create a list of inherited properties
-								if(!(properties[p] in cssCascade.inheritingProperties)) continue;
-								
-								// if the property is computation-safe, use the computed value
-								if((properties[p]=="font-size") || (!(properties[p] in cssCascade.computationUnsafeProperties) && properties[p][0]!='-')) {
-									var style = getComputedStyle(node1).getPropertyValue(properties[p]);
-									node2.style.setProperty(properties[p], style);
-									//var parentStyle = style; try { parentStyle = getComputedStyle(node1.parentNode).getPropertyValue(properties[p]) } catch(ex){}
-									//var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
-									
-									//if(style === parentStyle) {
-									//  node2.style.setProperty(properties[p], style)
-									//}
-									continue;
-								}
-								
-								// otherwise, get the parent's specified value
-								var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules);
-								if(cssValue && cssValue.length) {
-									
-									// if we have a specified value, let's use it
-									node2.style.setProperty(properties[p], cssValue.toCSSString());
-									
-								}
-								
-							}
-							
-						}
-						
-						// now, let's work on ::after and ::before
-						var importPseudo = function(node1,node2,pseudo) {
-							
-							//
-							// we'll need to use getSpecifiedStyle here as the pseudo thing is slow
-							//
-							var mayExist = !!cssCascade.findAllMatchingRulesWithPseudo(node1,pseudo.substr(1)).length;
-							if(!mayExist) return;
-							
-							var pseudoStyle = getComputedStyle(node1,pseudo);
-							if(pseudoStyle.content!='none'){
-								
-								// let's create a stylesheet for the element
-								var stylesheet = document.createElement('style');
-								stylesheet.setAttribute('data-no-css-polyfill',true);
-								
-								// compute the value of all css properties
-								var node2style = "";
-								var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties();
-								for(var p=properties.length; p--; ) {
-									
-									// we always use the computed value, because we don't have better
-									var style = pseudoStyle.getPropertyValue(properties[p]);
-									node2style += properties[p]+":"+style+";";
-									
-								}
-								
-								stylesheet.textContent = (
-									'[data-css-regions-fragment-of="' + node1.getAttribute('data-css-regions-fragment-source') + '"]' 
-									+':not([data-css-regions-starting-fragment]):not([data-css-regions-special-starting-fragment])'
-									+':'+pseudo+'{'
-									+node2style
-									+"}"
-								);
-								
-								node2.parentNode.insertBefore(stylesheet, node2);
-								
-							}
-						}
-						importPseudo(node1,node2,":before");
-						importPseudo(node1,node2,":after");
-						
-						// retarget events
-						cssRegionsHelpers.retargetEvents(node1,node2);
-						
-						
-					case 9: // Document node
-					case 11: // Document fragment node
-						child1 = node1.firstChild;
-						child2 = node2.firstChild;
-						while (child1) {
-							next1 = child1.nextSibling;
-							next2 = child2.nextSibling;
-							
-							// decide between process style or hide
-							if(child1.cssRegionsLastFlowIntoName && child1.cssRegionsLastFlowIntoType==="element") {
-								node2.removeChild(child2);
-							} else {
-								visit(child1, child2);
-							}
-							
-							child1 = next1;
-							child2 = next2;
-						}
-						break;
-				}
-			}
-			
-			visit(root1, root2, true);
-			
-		},
-		
-		//
-		// make sure the most critical events still fire in the fragment source
-		// even if the browser initially fire them on the fragments
-		//
-		retargetEvents: function retargetEvents(node1,node2) {
-			
-			var retargetEvent = "cssRegionsHelpers.retargetEvent(this,event)";
-			node2.setAttribute("onclick", retargetEvent);
-			node2.setAttribute("ondblclick", retargetEvent);
-			node2.setAttribute("onmousedown", retargetEvent);
-			node2.setAttribute("onmouseup", retargetEvent);
-			node2.setAttribute("onmousein", retargetEvent);
-			node2.setAttribute("onmouseout", retargetEvent);
-			node2.setAttribute("onmouseenter", retargetEvent);
-			node2.setAttribute("onmouseleave", retargetEvent);
-			
-		},
-		
-		//
-		// single hub for event retargeting operations.
-		//
-		retargetEvent: function retargeEvent(node2,e) {
-			
-			// get the node we should fire the event on
-			var node1 = (
-				(node2.cssRegionsFragmentSource) ||
-				(node2.cssRegionsFragmentSource=document.querySelector('[data-css-regions-fragment-source="' + node2.getAttribute('data-css-regions-fragment-of') + '"]'))
-			);
-			
-			if(node1) {
-			
-				// dispatch the event on the real node
-				var ne = domEvents.cloneEvent(e);
-				node1.dispatchEvent(ne);
-				
-				// prevent the event to fire on the region
-				e.stopImmediatePropagation ? e.stopImmediatePropagation() : e.stopPropagation();
-				
-				// make sure to cancel the event if required
-				if(ne.isDefaultPrevented || ne.defaultPrevented) { e.preventDefault(); return false; }
-			
-			}
-			
-		}
-	};
-	
-	return cssRegionsHelpers;
-	
-})(window, document);
+  var domEvents = require('src/core/dom-events.js')
+  var cssSyntax = require('src/core/css-syntax.js')
+  var cssCascade = require('src/core/css-cascade.js')
+  var cssBreak = require('src/core/css-break.js')
+
+  var cssRegionsHelpers = (window.cssRegionsHelpers = {
+    //
+    // returns the previous sibling of the element
+    // or the previous sibling of its nearest ancestor that has one
+    //
+    getAllLevelPreviousSibling: function(e, region) {
+      if (!e || e == region) return null
+
+      // find the nearest ancestor that has a previous sibling
+      while (!e.previousSibling) {
+        // but bubble to the next avail ancestor
+        e = e.parentNode
+
+        // dont get over the bar
+        if (!e || e == region) return null
+      }
+
+      // return that sibling
+      return e.previousSibling
+    },
+
+    //
+    // prepares the element to become a css region
+    //
+    markNodesAsRegion: function(nodes, fast) {
+      nodes.forEach(function(node) {
+        node.regionOverset = 'empty'
+        node.setAttribute('data-css-region', node.cssRegionsLastFlowFromName)
+        cssRegionsHelpers.hideTextNodesFromFragmentSource([node])
+        node.cssRegionsWrapper =
+          node.cssRegionsWrapper || node.appendChild(document.createElement('cssregion'))
+      })
+    },
+
+    //
+    // prepares the element to return to its normal css life
+    //
+    unmarkNodesAsRegion: function(nodes, fast) {
+      nodes.forEach(function(node) {
+        // restore regionOverset to its natural value
+        node.regionOverset = 'fit'
+
+        // remove the current <cssregion> tag
+        try {
+          node.cssRegionsWrapper && node.removeChild(node.cssRegionsWrapper)
+        } catch (ex) {
+          setImmediate(function() {
+            throw ex
+          })
+        }
+        node.cssRegionsWrapper = undefined
+        delete node.cssRegionsWrapper
+
+        // restore top-level texts that may have been hidden
+        cssRegionsHelpers.unhideTextNodesFromFragmentSource([node])
+
+        // unmark as a region
+        node.removeAttribute('data-css-region')
+      })
+    },
+
+    //
+    // prepares the element for cloning (mainly give them an ID)
+    //
+    fragmentSourceIndex: 0,
+    markNodesAsFragmentSource: function(nodes, ignoreRoot) {
+      function visit(node, k) {
+        var child, next
+        switch (node.nodeType) {
+          case 1: // Element node
+            if (typeof k == 'undefined' || !ignoreRoot) {
+              // mark as fragment source
+              var id = node.getAttributeNode('data-css-regions-fragment-source')
+              if (!id) {
+                node.setAttribute(
+                  'data-css-regions-fragment-source',
+                  cssRegionsHelpers.fragmentSourceIndex++
+                )
+              }
+            }
+
+            node.setAttribute('data-css-regions-cloning', true)
+
+            // expand list values
+            if (node.tagName == 'OL') cssRegionsHelpers.expandListValues(node)
+            if (typeof k != 'undefined' && node.tagName == 'LI')
+              cssRegionsHelpers.expandListValues(node.parentNode)
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      nodes.forEach(visit)
+    },
+
+    //
+    // computes the "value" attribute of every LI element out there
+    //
+    expandListValues: function(OL) {
+      if (OL.getAttribute('data-css-li-value-expanded')) return
+      OL.setAttribute('data-css-li-value-expanded', true)
+
+      if (OL.hasAttribute('reversed')) {
+        var currentValue = OL.getAttribute('start')
+          ? parseInt(OL.getAttribute('start'))
+          : OL.childElementCount
+        var increment = -1
+      } else {
+        var currentValue = OL.getAttribute('start') ? parseInt(OL.getAttribute('start')) : 1
+        var increment = +1
+      }
+
+      var LI = OL.firstElementChild
+      var LIV = null
+      while (LI) {
+        if (LI.tagName === 'LI') {
+          if ((LIV = LI.getAttributeNode('value'))) {
+            currentValue = parseInt(LIV.nodeValue)
+            LI.setAttribute('data-css-old-value', currentValue)
+          } else {
+            LI.setAttribute('value', currentValue)
+          }
+          currentValue = currentValue + increment
+        }
+        LI = LI.nextElementSibling
+      }
+    },
+
+    //
+    // reverts to automatic computation of the value of LI elements
+    //
+    unexpandListValues: function(OL) {
+      if (!OL.hasAttribute('data-css-li-value-expanded')) return
+      OL.removeAttribute('data-css-li-value-expanded')
+      var LI = OL.firstElementChild
+      var LIV = null
+      while (LI) {
+        if (LI.tagName === 'LI') {
+          if ((LIV = LI.getAttributeNode('data-css-old-value'))) {
+            LI.removeAttributeNode(LIV)
+          } else {
+            LI.removeAttribute('value')
+          }
+        }
+        LI = LI.nextElementSibling
+      }
+    },
+
+    //
+    // makes empty text nodes which cannot get "display: none" applied to them
+    //
+    listOfTextNodesForIE: [],
+    hideTextNodesFromFragmentSource: function(nodes) {
+      function visit(node, k) {
+        var child, next
+        switch (node.nodeType) {
+          case 3: // Text node
+            if (!node.parentNode.getAttribute('data-css-regions-fragment-source')) {
+              // we have to remove their content the hard way...
+              node.cssRegionsSavedNodeValue = node.nodeValue
+              node.nodeValue = ''
+
+              // HACK: OTHERWISE IE WILL GC THE TEXTNODE AND RETURNS YOU
+              // A FRESH TEXTNODE THE NEXT TIME WHERE YOUR EXPANDO
+              // IS NOWHERE TO BE SEEN!
+              if (
+                navigator.userAgent.indexOf('MSIE') > 0 ||
+                navigator.userAgent.indexOf('Trident') > 0
+              ) {
+                if (cssRegionsHelpers.listOfTextNodesForIE.indexOf(node) == -1) {
+                  cssRegionsHelpers.listOfTextNodesForIE.push(node)
+                }
+              }
+            }
+
+            break
+
+          case 1: // Element node
+            if (node.hasAttribute('data-css-regions-cloning')) {
+              node.removeAttribute('data-css-regions-cloning')
+              node.setAttribute('data-css-regions-cloned', true)
+              if (node.currentStyle) node.currentStyle.display.toString() // IEFIX FOR BAD STYLE RECALC
+            }
+            if (typeof k == 'undefined') return
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      nodes.forEach(visit)
+    },
+
+    //
+    // makes emptied text nodes visible again
+    //
+    unhideTextNodesFromFragmentSource: function(nodes) {
+      function visit(node) {
+        var child, next
+        switch (node.nodeType) {
+          case 3: // Text node
+            // we have to remove their content the hard way...
+            if ('cssRegionsSavedNodeValue' in node) {
+              node.nodeValue = node.cssRegionsSavedNodeValue
+              delete node.cssRegionsSavedNodeValue
+            }
+
+            break
+
+          case 1: // Element node
+            if (typeof k == 'undefined') return
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      nodes.forEach(visit)
+    },
+
+    //
+    // prepares the content elements to return to ther normal css life
+    //
+    unmarkNodesAsFragmentSource: function(nodes) {
+      function visit(node, k) {
+        var child, next
+        switch (node.nodeType) {
+          case 3: // Text node
+            // we have to reinstall their content the hard way...
+            if ('cssRegionsSavedNodeValue' in node) {
+              node.nodeValue = node.cssRegionsSavedNodeValue
+              delete node.cssRegionsSavedNodeValue
+            }
+
+            break
+          case 1: // Element node
+            node.removeAttribute('data-css-regions-cloned')
+            node.removeAttribute('data-css-regions-fragment-source')
+            if (node.currentStyle) node.currentStyle.display.toString() // IEFIX FOR BAD STYLE RECALC
+            if (node.tagName == 'OL') cssRegionsHelpers.unexpandListValues(node)
+            if (typeof k != 'undefined' && node.tagName == 'LI')
+              cssRegionsHelpers.unexpandListValues(node.parentNode)
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      nodes.forEach(visit)
+    },
+
+    //
+    // marks cloned content as fragment instead of as fragment source (basically)
+    //
+    transformFragmentSourceToFragments: function(nodes) {
+      function visit(node) {
+        var child, next
+        switch (node.nodeType) {
+          case 1: // Element node
+            var id = node.getAttribute('data-css-regions-fragment-source')
+            node.removeAttribute('data-css-regions-fragment-source')
+            node.removeAttribute('data-css-regions-cloning')
+            node.removeAttribute('data-css-regions-cloned')
+            node.setAttribute('data-css-regions-fragment-of', id)
+            if (node.id) node.id += '--fragment'
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      nodes.forEach(visit)
+    },
+
+    //
+    // removes some invisible text nodes from the tree
+    // (useful if you don't want to face browser bugs when dealing with them)
+    //
+    embedTrailingWhiteSpaceNodes: function(fragment) {
+      var onlyWhiteSpace = /^\s*$/
+      function visit(node) {
+        var child, next
+        switch (node.nodeType) {
+          case 3: // Text node
+            // we only remove nodes at the edges
+            if (!node.previousSibling) {
+              // we only remove nodes if their parent doesn't preserve whitespace
+              if (getComputedStyle(node.parentNode).whiteSpace.substring(0, 3) !== 'pre') {
+                // only remove pure whitespace nodes
+                if (onlyWhiteSpace.test(node.nodeValue)) {
+                  node.parentNode.setAttribute('data-whitespace-before', node.nodeValue)
+                  node.parentNode.removeChild(node)
+                }
+              }
+
+              break
+            }
+
+            // we only remove nodes at the edges
+            if (!node.nextSibling) {
+              // we only remove nodes if their parent doesn't preserve whitespace
+              if (getComputedStyle(node.parentNode).whiteSpace.substring(0, 3) !== 'pre') {
+                // only remove pure whitespace nodes
+                if (onlyWhiteSpace.test(node.nodeValue)) {
+                  node.parentNode.setAttribute('data-whitespace-after', node.nodeValue)
+                  node.parentNode.removeChild(node)
+                }
+              }
+
+              break
+            }
+
+            break
+          case 1: // Element node
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      visit(fragment)
+    },
+
+    //
+    // recover the previously removed invisible text nodes
+    //
+    unembedTrailingWhiteSpaceNodes: function(fragment) {
+      var onlyWhiteSpace = /^\s*$/
+      function visit(node) {
+        var child, next
+        switch (node.nodeType) {
+          case 1: // Element node
+            var txt = ''
+            if ((txt = node.getAttribute('data-whitespace-before'))) {
+              if (
+                node.getAttribute('data-starting-fragment') == '' &&
+                node.getAttribute('data-special-starting-fragment', '')
+              ) {
+                node.insertBefore(document.createTextNode(txt), node.firstChild)
+              }
+            }
+            node.removeAttribute('data-whitespace-before')
+            if ((txt = node.getAttribute('data-whitespace-after'))) {
+              if (
+                node.getAttribute('data-continued-fragment') == '' &&
+                node.getAttribute('data-special-continued-fragment', '')
+              ) {
+                node.insertAfter(document.createTextNode(txt), node.lastChild)
+              }
+            }
+            node.removeAttribute('data-whitespace-after')
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child = node.firstChild
+            while (child) {
+              next = child.nextSibling
+              visit(child)
+              child = next
+            }
+            break
+        }
+      }
+
+      visit(fragment)
+    },
+
+    ///
+    /// walk the two trees the same way, and copy all the styles
+    /// BEWARE: if the DOMs are different, funny things will happen
+    /// NOTE: this function will also remove elements put in another flow
+    ///
+    copyStyle: function(root1, root2) {
+      function visit(node1, node2, isRoot) {
+        var child1, next1, child2, next2
+        switch (node1.nodeType) {
+          case 1: // Element node
+            // // firstly, setup a cache of all css properties on the element
+            // var matchedRules = (node1.currentStyle && !window.opera) ? undefined : cssCascade.findAllMatchingRules(node1)
+
+            // // and compute the value of all css properties
+            // var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties();
+            // for(var p=properties.length; p--; ) {
+
+            // 	// if the property is computation-safe, use the computed value
+            // 	if(!(properties[p] in cssCascade.computationUnsafeProperties) && properties[p][0]!='-') {
+            // 		var style = getComputedStyle(node1).getPropertyValue(properties[p]);
+            // 		var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
+            // 		if(style != defaultStyle) node2.style.setProperty(properties[p], style)
+            // 		continue;
+            // 	}
+
+            // 	// otherwise, get the element's specified value
+            // 	var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules);
+            // 	if(cssValue && cssValue.length) {
+
+            // 		// if we have a specified value, let's use it
+            // 		node2.style.setProperty(properties[p], cssValue.toCSSString());
+
+            // 	} else if(isRoot && node1.parentNode && properties[p][0] != '-') {
+
+            // 		// NOTE: the root will be detached from its parent
+            // 		// Therefore, we have to inherit styles from it (oh no!)
+
+            // 		// TODO: create a list of inherited properties
+            // 		if(!(properties[p] in cssCascade.inheritingProperties)) continue;
+
+            // 		// if the property is computation-safe, use the computed value
+            // 		if((properties[p]=="font-size") || (!(properties[p] in cssCascade.computationUnsafeProperties) && properties[p][0]!='-')) {
+            // 			var style = getComputedStyle(node1).getPropertyValue(properties[p]);
+            // 			node2.style.setProperty(properties[p], style);
+            // 			//var parentStyle = style; try { parentStyle = getComputedStyle(node1.parentNode).getPropertyValue(properties[p]) } catch(ex){}
+            // 			//var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
+
+            // 			//if(style === parentStyle) {
+            // 			//  node2.style.setProperty(properties[p], style)
+            // 			//}
+            // 			continue;
+            // 		}
+
+            // 		// otherwise, get the parent's specified value
+            // 		var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules);
+            // 		if(cssValue && cssValue.length) {
+
+            // 			// if we have a specified value, let's use it
+            // 			node2.style.setProperty(properties[p], cssValue.toCSSString());
+
+            // 		}
+
+            // 	}
+
+            // }
+
+            // // now, let's work on ::after and ::before
+            // var importPseudo = function(node1,node2,pseudo) {
+
+            // 	//
+            // 	// we'll need to use getSpecifiedStyle here as the pseudo thing is slow
+            // 	//
+            // 	var mayExist = !!cssCascade.findAllMatchingRulesWithPseudo(node1,pseudo.substr(1)).length;
+            // 	if(!mayExist) return;
+
+            // 	var pseudoStyle = getComputedStyle(node1,pseudo);
+            // 	if(pseudoStyle.content!='none'){
+
+            // 		// let's create a stylesheet for the element
+            // 		var stylesheet = document.createElement('style');
+            // 		stylesheet.setAttribute('data-no-css-polyfill',true);
+
+            // 		// compute the value of all css properties
+            // 		var node2style = "";
+            // 		var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties();
+            // 		for(var p=properties.length; p--; ) {
+
+            // 			// we always use the computed value, because we don't have better
+            // 			var style = pseudoStyle.getPropertyValue(properties[p]);
+            // 			node2style += properties[p]+":"+style+";";
+
+            // 		}
+
+            // 		stylesheet.textContent = (
+            // 			'[data-css-regions-fragment-of="' + node1.getAttribute('data-css-regions-fragment-source') + '"]'
+            // 			+':not([data-css-regions-starting-fragment]):not([data-css-regions-special-starting-fragment])'
+            // 			+':'+pseudo+'{'
+            // 			+node2style
+            // 			+"}"
+            // 		);
+
+            // 		node2.parentNode.insertBefore(stylesheet, node2);
+
+            // 	}
+            // }
+            // importPseudo(node1,node2,":before");
+            // importPseudo(node1,node2,":after");
+
+            // retarget events
+            cssRegionsHelpers.retargetEvents(node1, node2)
+
+          case 9: // Document node
+          case 11: // Document fragment node
+            child1 = node1.firstChild
+            child2 = node2.firstChild
+            while (child1) {
+              next1 = child1.nextSibling
+              next2 = child2.nextSibling
+
+              // decide between process style or hide
+              if (
+                child1.cssRegionsLastFlowIntoName &&
+                child1.cssRegionsLastFlowIntoType === 'element'
+              ) {
+                node2.removeChild(child2)
+              } else {
+                visit(child1, child2)
+              }
+
+              child1 = next1
+              child2 = next2
+            }
+            break
+        }
+      }
+
+      visit(root1, root2, true)
+    },
+
+    //
+    // make sure the most critical events still fire in the fragment source
+    // even if the browser initially fire them on the fragments
+    //
+    retargetEvents: function retargetEvents(node1, node2) {
+      var retargetEvent = 'cssRegionsHelpers.retargetEvent(this,event)'
+      node2.setAttribute('onclick', retargetEvent)
+      node2.setAttribute('ondblclick', retargetEvent)
+      node2.setAttribute('onmousedown', retargetEvent)
+      node2.setAttribute('onmouseup', retargetEvent)
+      node2.setAttribute('onmousein', retargetEvent)
+      node2.setAttribute('onmouseout', retargetEvent)
+      node2.setAttribute('onmouseenter', retargetEvent)
+      node2.setAttribute('onmouseleave', retargetEvent)
+    },
+
+    //
+    // single hub for event retargeting operations.
+    //
+    retargetEvent: function retargeEvent(node2, e) {
+      // get the node we should fire the event on
+      var node1 =
+        node2.cssRegionsFragmentSource ||
+        (node2.cssRegionsFragmentSource = document.querySelector(
+          '[data-css-regions-fragment-source="' +
+            node2.getAttribute('data-css-regions-fragment-of') +
+            '"]'
+        ))
+
+      if (node1) {
+        // dispatch the event on the real node
+        var ne = domEvents.cloneEvent(e)
+        node1.dispatchEvent(ne)
+
+        // prevent the event to fire on the region
+        e.stopImmediatePropagation ? e.stopImmediatePropagation() : e.stopPropagation()
+
+        // make sure to cancel the event if required
+        if (ne.isDefaultPrevented || ne.defaultPrevented) {
+          e.preventDefault()
+          return false
+        }
+      }
+    }
+  })
+
+  return cssRegionsHelpers
+})(window, document)
+
 require.define('src/css-regions/lib/helpers.js');
 
 ////////////////////////////////////////
@@ -5288,1005 +5270,1029 @@ require.define('src/css-regions/lib/objectmodel.js');
 //
 // this module holds the big-picture actions of the polyfill
 //
-module.exports = (function(window, document) { "use strict";
+module.exports = (function(window, document) {
+  'use strict'
 
-	var domEvents = require('src/core/dom-events.js');
-	var cssSyntax = require('src/core/css-syntax.js');
-	var cssCascade = require('src/core/css-cascade.js');
-	var cssBreak = require('src/core/css-break.js');
-	
-	require('src/css-regions/lib/range-extensions.js');
-	var cssRegionsHelpers = require('src/css-regions/lib/helpers.js');
-	var enableObjectModel = require('src/css-regions/lib/objectmodel.js');
-	
-	var CSS_STYLE = "cssregion,[data-css-region]>*,[data-css-regions-fragment-source]:not([data-css-regions-cloning]),[data-css-regions-fragment-source][data-css-regions-cloned]{display:none!important}[data-css-region]>cssregion:last-of-type{display:inline!important}[data-css-region]{content:normal!important}[data-css-special-continued-fragment]{counter-reset:none!important;counter-increment:none!important;margin-bottom:0!important;border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}[data-css-continued-fragment]{counter-reset:none!important;counter-increment:none!important;margin-bottom:0!important;padding-bottom:0!important;border-bottom:none!important;border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}[data-css-continued-fragment]::after{content:none!important;display:none!important}[data-css-special-starting-fragment]{text-indent:0!important;margin-top:0!important}[data-css-starting-fragment]{text-indent:0!important;margin-top:0!important;padding-top:0!important;border-top:none!important;border-top-left-radius:0!important;border-top-right-radius:0!important}[data-css-starting-fragment]::before{content:none!important;display:none!important}[data-css-continued-block-fragment][data-css-continued-fragment]:not(:empty)::after{content:''!important;display:inline-block!important;width:100%!important;height:0!important;font-size:0!important;line-height:0!important;margin:0!important;padding:0!important;border:0!important}";
+  var domEvents = require('src/core/dom-events.js')
+  var cssSyntax = require('src/core/css-syntax.js')
+  var cssCascade = require('src/core/css-cascade.js')
+  var cssBreak = require('src/core/css-break.js')
 
-	var cssRegions = {
-		
-		//
-		// this function is at the heart of the region polyfill
-		// it will iteratively fill a list of regions until no
-		// content or no region is left
-		//
-		// the before-overflow size of a region is determined by
-		// adding all content to it and comparing his offsetHeight
-		// and his scrollHeight
-		//
-		// when this is done, we use dom ranges to detect the point
-		// where the content exceed this box and we split the fragment
-		// at that point.
-		//
-		// when splitting inside an element, the borders, paddings and
-		// generated content must be tied to the right fragments which
-		// require some code
-		//
-		// this functions returns whether some content was still remaining
-		// when the flow when the last region was filled. please not this
-		// can only happen if this last region has "region-fragment" set
-		// to break, otherwhise all the content will automatically overflow
-		// this last region.
-		//
-		layoutContent: function(regions, remainingContent, callback, startTime) {
-			
-			//
-			// this function will iteratively fill all the regions
-			// when we reach the last region, we return the overset status
-			//
-			
-			// validate args
-			if(!regions) return callback.ondone(!!remainingContent.hasChildNodes());
-			if(!regions.length) return callback.ondone(!!remainingContent.hasChildNodes());
-			if(!startTime) startTime = Date.now();
-			
-			// get the next region
-			var region = regions.pop();
-			  
-			// NOTE: while we don't monitor that, and it can therefore become inaccurate
-			// I'm going to follow the spec and refuse to mark as region inline/none elements]
-			while(true) {
-				var regionDisplay = getComputedStyle(region).display;
-				if(regionDisplay == "none" || regionDisplay.indexOf("inline") !== -1) {
-					if(region = regions.pop()) { continue } else { return callback.ondone(!!remainingContent.hasChildNodes()) };
-				} else {
-					break;
-				}
-			}
-			
-			// the polyfill actually use a <cssregion> wrapper
-			// we need to link this wrapper and the actual region
-			if(region.cssRegionsWrapper) {
-				region.cssRegionsWrapper.cssRegionHost = region;
-				region = region.cssRegionsWrapper;
-			} else {
-				region.cssRegionHost = region;
-			}
-			
-			// empty the region
-			region.innerHTML = '';
-			
-			// avoid doing the layout of empty regions
-			if(!remainingContent.hasChildNodes()) {
-				
-				region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight;
-				region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth;
-				
-				region.cssRegionHost.regionOverset = 'empty';
-				
-				var dummyCallback = { ondone:function(){}, onprogress:function(f){f()} };
-				cssRegions.layoutContent(regions, remainingContent, dummyCallback, startTime);
-				
-				return callback.ondone(false);
-				
-			}
-			
-			// append the remaining content to the region
-			region.appendChild(remainingContent);
-			
-			// check if we have more regions to process
-			if(regions.length !== 0) {
-				
-				return this.layoutContentInNextRegionsWhenReady(region, regions, remainingContent, callback, startTime);
-				
-			} else {
-				
-				return this.layoutContentInLastRegionWhenReady(region, regions, remainingContent, callback, startTime);
-				
-			}
-			
-		},
-		
-		layoutContentInNextRegionsWhenReady: function(region, regions, remainingContent, callback, startTime) {
-					
-			// delays until all images are loaded
-			var imgs = region.getElementsByTagName('img');
-			for(var imgs_index=imgs.length; imgs_index--; ) {
-				if(!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
-					return setTimeout(
-						function() {
-							this.layoutContentInNextRegionsWhenReady(region, regions, remainingContent, callback, startTime+32);
-						}.bind(this), 
-						16
-					);
-				}
-			}
-			
-			// check if there was an overflow or some break-before/after instruction
-			var regionDidOverflow = region.cssRegionHost.scrollHeight != region.cssRegionHost.offsetHeight;
-			var shouldSegmentContent = regionDidOverflow;
-			if(!shouldSegmentContent) {
-				var first = region.firstElementChild;
-				var last = region.lastElementChild;
-				var current = first;
-				while(current) {
-					
-					if(current != first) {
-						if(/(region|all|always)/i.test(cssCascade.getSpecifiedStyle(current,'break-before',undefined,true).toCSSString())) {
-							shouldSegmentContent = true; break;
-						}
-					}
-					
-					if(current != last) {
-						if(/(region|all|always)/i.test(cssCascade.getSpecifiedStyle(current,'break-after',undefined,true).toCSSString())) {
-							current = current.nextElementSibling;
-							shouldSegmentContent = true; break;
-						}
-					}
+  require('src/css-regions/lib/range-extensions.js')
+  var cssRegionsHelpers = require('src/css-regions/lib/helpers.js')
+  var enableObjectModel = require('src/css-regions/lib/objectmodel.js')
 
-					current = current.nextElementSibling;
-				}
-			}
-			
-			
-			if(shouldSegmentContent) {
-				
-				// the remaining content is what was overflowing
-				remainingContent = this.extractOverflowingContent(region);
-				
-			} else {
-				
-				// there's nothing more to insert
-				remainingContent = document.createDocumentFragment();
-				
-			}
-			
-			// if any content didn't fit
-			if(remainingContent.hasChildNodes()) {
-				region.cssRegionHost.regionOverset = 'overset';
-			} else {
-				region.cssRegionHost.regionOverset = 'fit';
-			}
-			
-			// update flags
-			region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight;
-			region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth;
-			
-			// layout the next regions
-			// WE LET THE NEXT REGION DECIDE WHAT TO RETURN
-			if(startTime+200 > Date.now()) {
-				
-				return cssRegions.layoutContent(regions, remainingContent, callback, startTime);
-				
-			} else {
-				
-				return callback.onprogress(function() {
-					cssRegions.layoutContent(regions, remainingContent, callback);
-				});
-				
-			}
-			
-		},
-		
-		layoutContentInLastRegionWhenReady: function(region, regions, remainingContent, callback, startTime) {
-			
-			// delays until all images are loaded
-			var imgs = region.getElementsByTagName('img');
-			for(var imgs_index=imgs.length; imgs_index--; ) {
-				if(!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
-					return setTimeout(
-						function() {
-							this.layoutContentInLastRegionWhenReady(region, regions, remainingContent, callback, startTime+32);
-						}.bind(this), 
-						32
-					);
-				}
-			}
-			
-			// support region-fragment: break
-			if(cssCascade.getSpecifiedStyle(region.cssRegionHost,"region-fragment",undefined,true).toCSSString().trim().toLowerCase()=="break") {
-				
-				// WE RETURN TRUE IF WE DID OVERFLOW
-				var didOverflow = (this.extractOverflowingContent(region).hasChildNodes());
-				
-				// update flags
-				region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight;
-				region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth;
-				
-				return callback.ondone(didOverflow);
-				
-			} else {
-				
-				// update flags
-				region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight;
-				region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth;
-				
-				// WE RETURN FALSE IF WE DIDN'T OVERFLOW
-				return callback.ondone(region.cssRegionHost.offsetHeight != region.cssRegionHost.scrollHeight);
-				
-			}
-		},
+  var CSS_STYLE =
+    "cssregion,[data-css-region]>*,[data-css-regions-fragment-source]:not([data-css-regions-cloning]),[data-css-regions-fragment-source][data-css-regions-cloned]{display:none!important}[data-css-region]>cssregion:last-of-type{display:inline!important}[data-css-region]{content:normal!important}[data-css-special-continued-fragment]{counter-reset:none!important;counter-increment:none!important;margin-bottom:0!important;border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}[data-css-continued-fragment]{counter-reset:none!important;counter-increment:none!important;margin-bottom:0!important;padding-bottom:0!important;border-bottom:none!important;border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}[data-css-continued-fragment]::after{content:none!important;display:none!important}[data-css-special-starting-fragment]{text-indent:0!important;margin-top:0!important}[data-css-starting-fragment]{text-indent:0!important;margin-top:0!important;padding-top:0!important;border-top:none!important;border-top-left-radius:0!important;border-top-right-radius:0!important}[data-css-starting-fragment]::before{content:none!important;display:none!important}[data-css-continued-block-fragment][data-css-continued-fragment]:not(:empty)::after{content:''!important;display:inline-block!important;width:100%!important;height:0!important;font-size:0!important;line-height:0!important;margin:0!important;padding:0!important;border:0!important}"
 
-		
-		//
-		// this function returns a document fragment containing the content
-		// that didn't fit in a particular <cssregion> element.
-		//
-		// in the simplest cases, we can just use hit-targeting to get very
-		// close the the natural breaking point. for mostly textual flows,
-		// this works perfectly, for the others, we may need some tweaks.
-		//
-		// there's a code detecting whether this hit-target optimization
-		// did possibly fail, in which case we return to a setup where we
-		// start from scratch.
-		//
-		extractOverflowingContent: function(region, dontOptimize) {
-			
-			// make sure empty nodes don't make our life more difficult
-			cssRegionsHelpers.embedTrailingWhiteSpaceNodes(region);
-			
-			// get the region layout
-			var sizingH = region.cssRegionHost.offsetHeight; // avail size (max-height)
-			var sizingW = region.cssRegionHost.offsetWidth; // avail size (max-width)
-			var pos = region.cssRegionHost.getBoundingClientRect(); // avail size?
-			pos = {top: pos.top, bottom: pos.bottom, left: pos.left, right: pos.right};
-			
-			// substract from the bottom any border/padding of the region
-			var lostHeight = parseInt(getComputedStyle(region.cssRegionHost).paddingBottom);
-			lostHeight += parseInt(getComputedStyle(region.cssRegionHost).borderBottomWidth);
-			pos.bottom -= lostHeight; sizingH -= lostHeight;
-			
-			//
-			// note: let's use hit targeting to find a dom range
-			// which is close to the location where we will need to
-			// break the content into fragments
-			// 
-			
-			// get the caret range for the bottom-right of that location
-			try {
-				var r = dontOptimize ? document.createRange() : document.caretRangeFromPoint(
-					pos.left + sizingW - 1,
-					pos.top + sizingH - 1
-				);
-			} catch (ex) {
-				try {
-					cssConsole.error(ex.message);
-					cssConsole.dir(ex);
-				} catch (ex) {}
-			}
-			
-			// helper for logging info
-			/*cssConsole.log("extracting overflow")
+  var cssRegions = {
+    //
+    // this function is at the heart of the region polyfill
+    // it will iteratively fill a list of regions until no
+    // content or no region is left
+    //
+    // the before-overflow size of a region is determined by
+    // adding all content to it and comparing his offsetHeight
+    // and his scrollHeight
+    //
+    // when this is done, we use dom ranges to detect the point
+    // where the content exceed this box and we split the fragment
+    // at that point.
+    //
+    // when splitting inside an element, the borders, paddings and
+    // generated content must be tied to the right fragments which
+    // require some code
+    //
+    // this functions returns whether some content was still remaining
+    // when the flow when the last region was filled. please not this
+    // can only happen if this last region has "region-fragment" set
+    // to break, otherwhise all the content will automatically overflow
+    // this last region.
+    //
+    layoutContent: function(regions, remainingContent, callback, startTime) {
+      //
+      // this function will iteratively fill all the regions
+      // when we reach the last region, we return the overset status
+      //
+
+      // validate args
+      if (!regions) return callback.ondone(!!remainingContent.hasChildNodes())
+      if (!regions.length) return callback.ondone(!!remainingContent.hasChildNodes())
+      if (!startTime) startTime = Date.now()
+
+      // get the next region
+      var region = regions.pop()
+
+      // NOTE: while we don't monitor that, and it can therefore become inaccurate
+      // I'm going to follow the spec and refuse to mark as region inline/none elements]
+      while (true) {
+        var regionDisplay = getComputedStyle(region).display
+        if (regionDisplay == 'none' || regionDisplay.indexOf('inline') !== -1) {
+          if ((region = regions.pop())) {
+            continue
+          } else {
+            return callback.ondone(!!remainingContent.hasChildNodes())
+          }
+        } else {
+          break
+        }
+      }
+
+      // the polyfill actually use a <cssregion> wrapper
+      // we need to link this wrapper and the actual region
+      if (region.cssRegionsWrapper) {
+        region.cssRegionsWrapper.cssRegionHost = region
+        region = region.cssRegionsWrapper
+      } else {
+        region.cssRegionHost = region
+      }
+
+      // empty the region
+      region.innerHTML = ''
+
+      // avoid doing the layout of empty regions
+      if (!remainingContent.hasChildNodes()) {
+        region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight
+        region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth
+
+        region.cssRegionHost.regionOverset = 'empty'
+
+        var dummyCallback = {
+          ondone: function() {},
+          onprogress: function(f) {
+            f()
+          }
+        }
+        cssRegions.layoutContent(regions, remainingContent, dummyCallback, startTime)
+
+        return callback.ondone(false)
+      }
+
+      // append the remaining content to the region
+      region.appendChild(remainingContent)
+
+      // check if we have more regions to process
+      if (regions.length !== 0) {
+        return this.layoutContentInNextRegionsWhenReady(
+          region,
+          regions,
+          remainingContent,
+          callback,
+          startTime
+        )
+      } else {
+        return this.layoutContentInLastRegionWhenReady(
+          region,
+          regions,
+          remainingContent,
+          callback,
+          startTime
+        )
+      }
+    },
+
+    layoutContentInNextRegionsWhenReady: function(
+      region,
+      regions,
+      remainingContent,
+      callback,
+      startTime
+    ) {
+      // delays until all images are loaded
+      // var imgs = region.getElementsByTagName('img');
+      // for(var imgs_index=imgs.length; imgs_index--; ) {
+      // 	if(!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
+      // 		return setTimeout(
+      // 			function() {
+      // 				this.layoutContentInNextRegionsWhenReady(region, regions, remainingContent, callback, startTime+32);
+      // 			}.bind(this),
+      // 			16
+      // 		);
+      // 	}
+      // }
+
+      // check if there was an overflow or some break-before/after instruction
+      var regionDidOverflow = region.cssRegionHost.scrollHeight != region.cssRegionHost.offsetHeight
+      var shouldSegmentContent = regionDidOverflow
+      if (!shouldSegmentContent) {
+        var first = region.firstElementChild
+        var last = region.lastElementChild
+        var current = first
+        while (current) {
+          if (current != first) {
+            if (
+              /(region|all|always)/i.test(
+                cssCascade.getSpecifiedStyle(current, 'break-before', undefined, true).toCSSString()
+              )
+            ) {
+              shouldSegmentContent = true
+              break
+            }
+          }
+
+          if (current != last) {
+            if (
+              /(region|all|always)/i.test(
+                cssCascade.getSpecifiedStyle(current, 'break-after', undefined, true).toCSSString()
+              )
+            ) {
+              current = current.nextElementSibling
+              shouldSegmentContent = true
+              break
+            }
+          }
+
+          current = current.nextElementSibling
+        }
+      }
+
+      if (shouldSegmentContent) {
+        // the remaining content is what was overflowing
+        remainingContent = this.extractOverflowingContent(region)
+      } else {
+        // there's nothing more to insert
+        remainingContent = document.createDocumentFragment()
+      }
+
+      // if any content didn't fit
+      if (remainingContent.hasChildNodes()) {
+        region.cssRegionHost.regionOverset = 'overset'
+      } else {
+        region.cssRegionHost.regionOverset = 'fit'
+      }
+
+      // update flags
+      region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight
+      region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth
+
+      // layout the next regions
+      // WE LET THE NEXT REGION DECIDE WHAT TO RETURN
+      if (startTime + 200 > Date.now()) {
+        return cssRegions.layoutContent(regions, remainingContent, callback, startTime)
+      } else {
+        return callback.onprogress(function() {
+          cssRegions.layoutContent(regions, remainingContent, callback)
+        })
+      }
+    },
+
+    layoutContentInLastRegionWhenReady: function(
+      region,
+      regions,
+      remainingContent,
+      callback,
+      startTime
+    ) {
+      // delays until all images are loaded
+      // var imgs = region.getElementsByTagName('img')
+      // for (var imgs_index = imgs.length; imgs_index--; ) {
+      //   if (!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
+      //     return setTimeout(
+      //       function() {
+      //         this.layoutContentInLastRegionWhenReady(
+      //           region,
+      //           regions,
+      //           remainingContent,
+      //           callback,
+      //           startTime + 32
+      //         )
+      //       }.bind(this),
+      //       32
+      //     )
+      //   }
+      // }
+
+      // support region-fragment: break
+      if (
+        cssCascade
+          .getSpecifiedStyle(region.cssRegionHost, 'region-fragment', undefined, true)
+          .toCSSString()
+          .trim()
+          .toLowerCase() == 'break'
+      ) {
+        // WE RETURN TRUE IF WE DID OVERFLOW
+        var didOverflow = this.extractOverflowingContent(region).hasChildNodes()
+
+        // update flags
+        region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight
+        region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth
+
+        return callback.ondone(didOverflow)
+      } else {
+        // update flags
+        region.cssRegionHost.cssRegionsLastOffsetHeight = region.cssRegionHost.offsetHeight
+        region.cssRegionHost.cssRegionsLastOffsetWidth = region.cssRegionHost.offsetWidth
+
+        // WE RETURN FALSE IF WE DIDN'T OVERFLOW
+        return callback.ondone(
+          region.cssRegionHost.offsetHeight != region.cssRegionHost.scrollHeight
+        )
+      }
+    },
+
+    //
+    // this function returns a document fragment containing the content
+    // that didn't fit in a particular <cssregion> element.
+    //
+    // in the simplest cases, we can just use hit-targeting to get very
+    // close the the natural breaking point. for mostly textual flows,
+    // this works perfectly, for the others, we may need some tweaks.
+    //
+    // there's a code detecting whether this hit-target optimization
+    // did possibly fail, in which case we return to a setup where we
+    // start from scratch.
+    //
+    extractOverflowingContent: function(region, dontOptimize) {
+      // make sure empty nodes don't make our life more difficult
+      cssRegionsHelpers.embedTrailingWhiteSpaceNodes(region)
+
+      // get the region layout
+      var sizingH = region.cssRegionHost.offsetHeight // avail size (max-height)
+      var sizingW = region.cssRegionHost.offsetWidth // avail size (max-width)
+      var pos = region.cssRegionHost.getBoundingClientRect() // avail size?
+      pos = { top: pos.top, bottom: pos.bottom, left: pos.left, right: pos.right }
+
+      // substract from the bottom any border/padding of the region
+      var lostHeight = parseInt(getComputedStyle(region.cssRegionHost).paddingBottom)
+      lostHeight += parseInt(getComputedStyle(region.cssRegionHost).borderBottomWidth)
+      pos.bottom -= lostHeight
+      sizingH -= lostHeight
+
+      //
+      // note: let's use hit targeting to find a dom range
+      // which is close to the location where we will need to
+      // break the content into fragments
+      //
+
+      // get the caret range for the bottom-right of that location
+      try {
+        var r = dontOptimize
+          ? document.createRange()
+          : document.caretRangeFromPoint(pos.left + sizingW - 1, pos.top + sizingH - 1)
+      } catch (ex) {
+        try {
+          cssConsole.error(ex.message)
+          cssConsole.dir(ex)
+        } catch (ex) {}
+      }
+
+      // helper for logging info
+      /*cssConsole.log("extracting overflow")
 			cssConsole.log(pos.bottom)*/
-			var debug = function() {
-				/*cssConsole.dir({
+      var debug = function() {
+        /*cssConsole.dir({
 					startContainer: r.startContainer,
 					startOffset: r.startOffset,
 					browserBCR: r.getBoundingClientRect(),
 					computedBCR: rect
 				});*/
-			}
-			
-			var fixNullRect = function() {
-				if(rect.bottom==0 && rect.top==0 && rect.left==0 && rect.right==0) {
-					
-					var scrollTop = -(document.documentElement.scrollTop || document.body.scrollTop);
-					var scrollLeft = -(document.documentElement.scrollLeft || document.body.scrollLeft);
-					
-					rect = {
-						width: 0,
-						heigth: 0,
-						top: scrollTop,
-						bottom: scrollTop,
-						left: scrollLeft,
-						right: scrollLeft
-					}
-				}
-			}
-			
-			// if the caret is outside the region
-			if(!r || (region !== r.endContainer && !Node.contains(region,r.endContainer))) {
-				
-				// if the caret is after the region wrapper but inside the host...
-				if(r && r.endContainer === region.cssRegionHost && r.endOffset==r.endContainer.childNodes.length) {
-					
-					// move back at the end of the region, actually
-					r.setStart(region, region.childNodes.length);
-					r.setEnd(region, region.childNodes.length);
-					
-				} else {
-					
-					// move back into the region
-					r = r || document.createRange();
-					r.setStart(region, 0);
-					r.setEnd(region, 0);
-					dontOptimize=true;
-					
-				}
-			}
-			
-			// start finding the natural breaking point
-			do {
-				
-				// store the current selection rect for fast access
-				var rect = r.myGetExtensionRect(); fixNullRect();
-				debug();
-				
-				//
-				// note: maybe the text is right-to-left
-				// in this case, we can go further than the caret
-				//
-				
-				// move the end point char by char until it's completely in the region
-				while(!(r.endContainer==region && r.endOffset==r.endContainer.childNodes.length) && rect.bottom<=pos.top+sizingH) {
-					
-					debug();
-					
-					// look if we can optimize by moving fast forward
-					var nextSibling = r.endContainer.childNodes[r.endOffset];
-					var nextSiblingRect = !nextSibling || Node.getBoundingClientRect(nextSibling);
-					if(nextSibling && nextSiblingRect.bottom<=pos.top+sizingH) {
-						
-						// if yes, move element by element
-						r.setStartAfter(nextSibling)
-						r.setEndAfter(nextSibling)
-						rect = nextSiblingRect
-						fixNullRect()
-						
-					} else {
-						
-						// otherwise, go char-by-char
-						r.myMoveTowardRight(); rect = r.myGetExtensionRect(); fixNullRect();
-						
-					}
-				}
-				
-				//
-				// note: maybe the text is one line too big
-				// in this case, we have to backtrack a little
-				//
-				
-				// move the end point char by char until it's completely in the region
-				while(!(r.endContainer==region && r.endOffset==0) && rect.bottom>pos.top+sizingH) {
-					debug(); r.myMoveOneCharLeft(); rect = r.myGetExtensionRect(); fixNullRect();
-				}
-				
-				debug()
-				
-				//
-				// note: if we optimized via hit-testing, this may be wrong
-				// if next condition does not hold, we're fine. 
-				// otherwhise we must restart without optimization...
-				//
-				
-				// if the selected content is possibly off-target
-				var optimizationFailled = false; if(!dontOptimize) {
-					
-					var current = r.endContainer;
-					while(current = cssRegionsHelpers.getAllLevelPreviousSibling(current, region)) {
-						if(Node.getBoundingClientRect(current).bottom > pos.top + sizingH) {
-							r.setStart(region,0);
-							r.setEnd(region,0);
-							optimizationFailled=true;
-							dontOptimize=true;
-							break;
-						}
-					}
-					
-				}
-				
-			} while(optimizationFailled) 
-			
-			// 
-			// note: we should not break the content inside monolithic content
-			// if we do, we need to change the selection to avoid that
-			// 
-			
-			// move the selection before the monolithic ancestors
-			var current = r.endContainer;
-			while(current !== region) {
-				if(cssBreak.isMonolithic(current)) {
-					r.setEndBefore(current);
-				}
-				current = current.parentNode;
-			}
-			
-			// if the selection is not in the region anymore, add the whole region
-			if(!r || (region !== r.endContainer && !Node.contains(region,r.endContainer))) {
-				cssConsole.dir(r.cloneRange()); debugger;
-				r.setStart(region,region.childNodes.length);
-				r.setEnd(region,region.childNodes.length);
-			}
-			
-			// 
-			// note: we don't want to break inside a line.
-			// backtrack to end of previous line...
-			// 
-			var first = r.startContainer.childNodes[r.startOffset], current = first; 
-			if(cssBreak.hasAnyInlineFlow(r.startContainer)) {
-				while((current) && (current = current.previousSibling)) {
-					
-					if(cssBreak.areInSameSingleLine(current,first)) {
-						
-						// optimization: first and current are on the same line
-						// so if next and current are not the same line, it will still be
-						// the same line the "first" element is in
-						first = current;
-						
-						if(current instanceof Element) {
-							
-							// we don't want to break inside text lines
-							r.setEndBefore(current);
-							
-						} else {
-							
-							// get last line via client rects
-							var lines = Node.getClientRects(current);
-							
-							// if the text node did wrap into multiple lines
-							if(lines.length>1) {
-								
-								// move back from the end until we get into previous line
-								var previousLineBottom = lines[lines.length-2].bottom;
-								r.setEnd(current, current.nodeValue.length);
-								while(rect.bottom>previousLineBottom) {
-									r.myMoveOneCharLeft(); rect = r.myGetExtensionRect(); fixNullRect();
-								}
-								
-								// make sure we didn't exit the text node by mistake
-								if(r.endContainer!==current) {
-									// if we did, there's something wrong about the text node
-									// but we can consider the text node as an element instead
-									r.setEndBefore(current); // debugger; 
-								}
-								
-							} else {
-								
-								// we can consider the text node as an element
-								r.setEndBefore(current);
-								
-							}
-							
-						}
-					} else {
-						
-						// if the two elements are not on the same line, 
-						// then we just found a line break!
-						break;
-						
-					}
-					
-				}
-			}
-			
-			// if the selection is not in the region anymore, add the whole region
-			if(!r || (region !== r.endContainer && !Node.contains(region,r.endContainer))) {
-				cssConsole.dir(r.cloneRange()); debugger;
-				r.setStart(region,region.childNodes.length);
-				r.setEnd(region,region.childNodes.length);
-			}
-			
-			
-			// 
-			// note: the css-break spec says that a region should not be emtpy
-			// 
-			
-			// if we end up with nothing being selected, add the first block anyway
-			if(r.endContainer===region && r.endOffset===0 && r.endOffset!==region.childNodes.length) {
-				
-				// find the first allowed break point
-				do {
-					
-					//cssConsole.dir(r.cloneRange()); 
-					
-					// move the position char-by-char
-					r.myMoveTowardRight(); 
-					
-					// but skip long islands of monolithic elements
-					// since we know we cannot break inside them anyway
-					var current = r.endContainer;
-					while(current && current !== region) {
-						if(cssBreak.isMonolithic(current)) {
-							r.setStartAfter(current);
-							r.setEndAfter(current);
-						}
-						current = current.parentNode;
-					}
-					
-				}
-				// do that until we reach a possible break point, or the end of the element
-				while(!cssBreak.isPossibleBreakPoint(r,region) && !(r.endContainer===region && r.endOffset===region.childNodes.length))
-				
-			}
-			
-			// if the selection is not in the region anymore, add the whole region
-			if(!r || region !== r.endContainer && !Node.contains(region,r.endContainer)) {
-				cssConsole.dir(r.cloneRange()); debugger;
-				r.setStart(region,region.childNodes.length);
-				r.setEnd(region,region.childNodes.length);
-			}
-				
-			// now, let's try to find a break-before/break-after element before the splitting point
-			var current = r.endContainer; if(current.hasChildNodes()) { if(r.endOffset>0) { current=current.childNodes[r.endOffset-1] } };
-			var first = r.endContainer.firstChild;
-			do {
-				if(current.style) {
-					
-					if(current != first) {
-						if(/(region|all|always)/i.test(cssCascade.getSpecifiedStyle(current,'break-before',undefined,true).toCSSString())) {
-							r.setStartBefore(current);
-							r.setEndBefore(current);
-							dontOptimize=true; // no algo involved in breaking, after all
-						}
-					}
-					
-					if(current !== region) {
-						if(/(region|all|always)/i.test(cssCascade.getSpecifiedStyle(current,'break-after',undefined,true).toCSSString())) {
-							r.setStartAfter(current);
-							r.setEndAfter(current);
-							dontOptimize=true; // no algo involved in breaking, after all
-						}
-					}
-					
-				}
-			} while(current = cssRegionsHelpers.getAllLevelPreviousSibling(current, region));
-			
-			// we're almost done! now, let's collect the ancestors to make some splitting postprocessing
-			var current = r.endContainer; var allAncestors=[];
-			if(current.nodeType !== current.ELEMENT_NODE) current=current.parentNode;
-			while(current !== region) {
-				allAncestors.push(current);
-				current = current.parentNode;
-			}
-			
-			//
-			// note: if we're about to split after the last child of
-			// an element which has bottom-{padding/border/margin}, 
-			// we need to figure how how much of that p/b/m we can
-			// actually keep in the first fragment
-			// 
-			// TODO: avoid top & bottom p/b/m cuttings to use the 
-			// same variables names, it's ugly
-			//
-			
-			// split bottom-{margin/border/padding} correctly
-			if(r.endOffset == r.endContainer.childNodes.length && r.endContainer !== region) {
-				
-				// compute how much of the bottom border can actually fit
-				var box = r.endContainer.getBoundingClientRect();
-				var excessHeight = box.bottom - (pos.top + sizingH);
-				var endContainerStyle = getComputedStyle(r.endContainer);
-				var availBorderHeight = parseFloat(endContainerStyle.borderBottomWidth);
-				var availPaddingHeight = parseFloat(endContainerStyle.paddingBottom);
-				
-				// start by cutting into the border
-				var borderCut = excessHeight;
-				if(excessHeight > availBorderHeight) {
-					borderCut = availBorderHeight;
-					excessHeight -= borderCut;
-					
-					// continue by cutting into the padding
-					var paddingCut = excessHeight;
-					if(paddingCut > availPaddingHeight) {
-						paddingCut = availPaddingHeight;
-						excessHeight -= paddingCut;
-					} else {
-						excessHeight = 0;
-					}
-				} else {
-					excessHeight = 0;
-				}
-				
-				
-				// we don't cut borders with radiuses
-				// TODO: accept to cut the content not affected by the radius
-				if(typeof(borderCut)==="number" && borderCut!==0) {
-					
-					// check the presence of a radius:
-					var hasBottomRadius = (
-						parseInt(endContainerStyle.borderBottomLeftRadius)>0
-						|| parseInt(endContainerStyle.borderBottomRightRadius)>0
-					);
-					
-					if(hasBottomRadius) {
-						// break before the whole border:
-						borderCut = availBorderHeight;
-					}
-					
-				}
-				
-			}
-			
-			
-			// split top-{margin/border/padding} correctly
-			if(r.endOffset == 0 && r.endContainer !== region) {
-				
-				// note: the only possibility here is that we 
-				// did split after a padding or a border.
-				// 
-				// it can only happen if the border/padding is 
-				// too big to fit the region but is actually 
-				// the first break we could find!
-				
-				// compute how much of the top border can actually fit
-				var box = r.endContainer.getBoundingClientRect();
-				var availHeight = (pos.top + sizingH) - pos.top;
-				var endContainerStyle = getComputedStyle(r.endContainer);
-				var availBorderHeight = parseFloat(endContainerStyle.borderTopWidth);
-				var availPaddingHeight = parseFloat(endContainerStyle.paddingTop);
-				var excessHeight = availBorderHeight + availPaddingHeight - availHeight;
-				
-				if(excessHeight > 0) {
-				
-					// start by cutting into the padding
-					var topPaddingCut = excessHeight;
-					if(excessHeight > availPaddingHeight) {
-						topPaddingCut = availPaddingHeight;
-						excessHeight -= topPaddingCut;
-						
-						// continue by cutting into the border
-						var topBorderCut = excessHeight;
-						if(topBorderCut > availBorderHeight) {
-							topBorderCut = availBorderHeight;
-							excessHeight -= topBorderCut;
-						} else {
-							excessHeight = 0;
-						}
-					} else {
-						excessHeight = 0;
-					}
-					
-				}
-				
-			}
-			
-			// remove bottom-{pbm} from all ancestors involved in the cut
-			for(var i=allAncestors.length-1; i>=0; i--) {
-				allAncestors[i].setAttribute('data-css-continued-fragment',true);
-				if(getComputedStyle(allAncestors[i]).display.indexOf('block')>=0) {
-					allAncestors[i].setAttribute('data-css-continued-block-fragment',true);
-				}
-			}
-			if(typeof(borderCut)==="number") {
-				allAncestors[0].removeAttribute('data-css-continued-fragment');
-				allAncestors[0].setAttribute('data-css-special-continued-fragment',true);
-				allAncestors[0].style.borderBottomWidth = (availBorderHeight-borderCut)+'px';
-			}
-			if(typeof(paddingCut)==="number") {
-				allAncestors[0].removeAttribute('data-css-continued-fragment');
-				allAncestors[0].setAttribute('data-css-special-continued-fragment',true);
-				allAncestors[0].style.paddingBottom = (availPaddingHeight-paddingCut)+'px';
-			}
-			if(typeof(topBorderCut)==="number") {
-				allAncestors[0].removeAttribute('data-css-continued-fragment');
-				allAncestors[0].setAttribute('data-css-continued-fragment',true);
-				allAncestors[0].style.borderTopWidth = (availBorderHeight-topBorderCut)+'px';
-			}
-			if(typeof(topPaddingCut)==="number") {
-				allAncestors[0].removeAttribute('data-css-continued-fragment');
-				allAncestors[0].setAttribute('data-css-special-continued-fragment',true);
-				allAncestors[0].style.paddingTop = (availPaddingHeight-topPaddingCut)+'px';
-			}
-			
-			
-			//
-			// note: at this point we have a collapsed range 
-			// located at the split point
-			//
-			
-			// select the overflowing content
-			r.setEnd(region, region.childNodes.length);
-			
-			// extract it from the current region
-			var overflowingContent = r.extractContents();
-			
-			// remove trailing whitespace from the cut element
-			var tmp = allAncestors[0];
-			if(tmp && (tmp=tmp.lastChild) && !tmp.tagName && tmp.nodeValue) {
-				var nodeValue = tmp.nodeValue.replace(/(\s|\r|\n)*$/,'');
-				if(nodeValue) {
-					// if the last cut was just after a &shy; (soft hyphen), we need to append a dash
-					if(/\u00AD$/.test(nodeValue)) {
-						nodeValue = nodeValue.replace(/\u00AD$/, '-');
-					} else if(overflowingContent && overflowingContent.textContent[0] == '\u00AD') {
-						nodeValue = nodeValue + '-';
-					}
-					tmp.nodeValue = nodeValue;
-				} else {
-					tmp.parentNode.removeChild(tmp);
-				}
-			}
-			
-			// 
-			// note: now we have to cancel out the artifacts of
-			// the fragments cloning algorithm...
-			//
-			
-			// do not forget to remove any top p/b/m on cut elements
-			var newFragments = overflowingContent.querySelectorAll("[data-css-continued-fragment]");
-			for(var i=newFragments.length; i--;) { // TODO: optimize by using while loop and a simple matchesSelector.
-				newFragments[i].removeAttribute('data-css-continued-fragment')
-				newFragments[i].setAttribute('data-css-starting-fragment',true);
-			}
-			
-			// deduct any already-used bottom p/b/m
-			var specialNewFragment = overflowingContent.querySelector('[data-css-special-continued-fragment]');
-			if(specialNewFragment) {
-				specialNewFragment.removeAttribute('data-css-special-continued-fragment')
-				specialNewFragment.setAttribute('data-css-starting-fragment',true);
-				
-				if(typeof(borderCut)==="number") {
-					specialNewFragment.style.borderBottomWidth = (borderCut)+'px';
-				}
-				if(typeof(paddingCut)==="number") {
-					specialNewFragment.style.paddingBottom = (paddingCut);
-				} else {
-					specialNewFragment.style.paddingBottom = '0px';
-				}
-				
-				if(typeof(topBorderCut)==="number") {
-					specialNewFragment.removeAttribute('data-css-starting-fragment')
-					specialNewFragment.setAttribute('data-css-special-starting-fragment',true);
-					specialNewFragment.style.borderTopWidth = (topBorderCut)+'px';
-				}
-				if(typeof(topPaddingCut)==="number") {
-					specialNewFragment.removeAttribute('data-css-starting-fragment')
-					specialNewFragment.setAttribute('data-css-special-starting-fragment',true);
-					specialNewFragment.style.paddingTop = (topPaddingCut)+'px';
-					specialNewFragment.style.paddingBottom = '0px';
-					specialNewFragment.style.borderBottomWidth = '0px';
-				}
-				
-			} else if(typeof(borderCut)==="number") {
-				
-				// hum... there's an element missing here... {never happens anymore}
-				try { throw new Error() }
-				catch(ex) { setImmediate(function() { throw ex; }) }
-				
-			} else if(typeof(topPaddingCut)==="number") {
-				
-				// hum... there's an element missing here... {never happens anymore}
-				try { throw new Error() }
-				catch(ex) { setImmediate(function() { throw ex; }) }
-				
-			}
-			
-			
-			// make sure empty nodes are reintroduced
-			cssRegionsHelpers.unembedTrailingWhiteSpaceNodes(region);
-			cssRegionsHelpers.unembedTrailingWhiteSpaceNodes(overflowingContent);
-			
-			// we're ready to return our result!
-			return overflowingContent;
-			
-		},
-			
-		enablePolyfill: function enablePolyfill() {
-			
-			//
-			// [0] insert necessary css
-			//
-			var s = document.createElement('style');
-			s.setAttribute("data-css-no-polyfill", true);
-			s.textContent = CSS_STYLE;
-			var head = document.head || document.getElementsByTagName('head')[0];
-			head.appendChild(s);
-			
-			// 
-			// [1] when any update happens:
-			// construct new content and region flow pairs
-			// restart the region layout algorithm for the modified pairs
-			// 
-			cssCascade.startMonitoringProperties(
-				["flow-into","flow-from","region-fragment"], 
-				{
-					onupdate: function onupdate(element, rule) {
-						
-						// let's just ignore fragments
-						if(element.getAttributeNode('data-css-regions-fragment-of')) return;
-						
-						// log some message in the console for debug
-						cssConsole.dir({message:"onupdate",element:element,selector:rule.selector.toCSSString(),rule:rule});
-						var temp = null;
-						
-						//
-						// compute the value of region properties
-						//
-						var flowInto = (
-							cssCascade.getSpecifiedStyle(element, "flow-into")
-							.filter(function(t) { return t instanceof cssSyntax.IdentifierToken })
-						);
-						
-						var flowIntoName = flowInto[0] ? flowInto[0].toCSSString().toLowerCase() : "";
-						if(flowIntoName=="none"||flowIntoName=="initial"||flowIntoName=="inherit"||flowIntoName=="default") {flowIntoName=""}
-						var flowIntoType = flowInto[1] ? flowInto[1].toCSSString().toLowerCase() : ""; 
-						if(flowIntoType!="content") {flowIntoType="element"}
-						var flowInto = flowIntoName ? flowIntoName + " " + flowIntoType : "";
-						
-						var flowFrom = (
-							cssCascade.getSpecifiedStyle(element, "flow-from")
-							.filter(function(t) { return t instanceof cssSyntax.IdentifierToken })
-						);
-						
-						var flowFromName = flowFrom[0] ? flowFrom[0].toCSSString().toLowerCase() : ""; 
-						if(flowFromName=="none"||flowFromName=="initial"||flowFromName=="inherit"||flowFromName=="default") {flowFromName=""}
-						var flowFrom = flowFromName;
-						
-						//
-						// if the value of any property did change...
-						//
-						if(element.cssRegionsLastFlowInto != flowInto || element.cssRegionsLastFlowFrom != flowFrom) {
-							
-							// remove the element from previous regions
-							var regionOverset = element.regionOverset;
-							var lastFlowFrom = (cssRegions.flows[element.cssRegionsLastFlowFromName]);
-							var lastFlowInto = (cssRegions.flows[element.cssRegionsLastFlowIntoName]);
-							lastFlowFrom && lastFlowFrom.removeFromRegions(element);
-							lastFlowInto && lastFlowInto.removeFromContent(element);
-							
-							// relayout those regions 
-							// (it's async so it will wait for us
-							// to add the element back if needed)
-							lastFlowFrom && regionOverset!='empty' && lastFlowFrom.relayout();
-							lastFlowInto && lastFlowInto.relayout();
-							
-							// save some property values for later
-							element.cssRegionsLastFlowInto = flowInto;
-							element.cssRegionsLastFlowFrom = flowFrom;
-							element.cssRegionsLastFlowIntoName = flowIntoName;
-							element.cssRegionsLastFlowFromName = flowFromName;
-							element.cssRegionsLastFlowIntoType = flowIntoType;
-							
-							// add the element to new regions
-							// and relayout those regions, if deemed necessary
-							if(flowFromName) {
-								var lastFlowFrom = (cssRegions.flows[flowFromName] = cssRegions.flows[flowFromName] || new cssRegions.Flow(flowFromName));
-								lastFlowFrom && lastFlowFrom.addToRegions(element);
-								lastFlowFrom && lastFlowFrom.relayout();
-							}
-							if(flowIntoName) {
-								var lastFlowInto = (cssRegions.flows[flowIntoName] = cssRegions.flows[flowIntoName] || new cssRegions.Flow(flowIntoName));
-								lastFlowInto && lastFlowInto.addToContent(element);
-								lastFlowInto && lastFlowInto.relayout();
-							}
-							
-						}
-						
-					}
-				}
-			);
-			cssCascade.startMonitoringProperties(
-				["break-before","break-after"], 
-				{onupdate:function(element){
-					
-					// avoid fragments triggering update loops
-					if(element.getAttribute('data-css-regions-fragment-of')){return;}
-					
-					// update parent regions
-					while(element) {
-						if(element.cssRegionsLastFlowIntoName) {
-							cssRegions.flows[element.cssRegionsLastFlowIntoName].relayout();
-							return;
-						}
-						element=element.parentNode;
-					}
-					
-				}}
-			);
-			
-			
-			//
-			// [2] perform the OM exports
-			//
-			cssRegions.enablePolyfillObjectModel();
-			
-			//
-			// [3] make sure to update the region layout when all images loaded
-			//
-			window.addEventListener("load", 
-				function() { 
-					var flows = document.getNamedFlows();
-					for(var i=0; i<flows.length; i++) {
-						flows[i].relayout();
-					}
-				}
-			);
-			
-			// 
-			// [4] make sure we react to window resizes
-			//
-			//
-			var lastWindowResize = 0;
-			var relayoutModifiedFlows = function() {
-				
-				// specify the function did run
-				relayoutModifiedFlows.timeout = 0;
-				
-				// rerun the layout
-				var flows = document.getNamedFlows();
-				for(var i=0; i<flows.length; i++) {
-					if(flows[i].lastRelayout > lastWindowResize) continue;
-					if(flows[i].relayoutInProgress) {
-						flows[i].relayout();
-					} else {
-						flows[i].relayoutIfSizeChanged();
-					}
-				}
-				
-			}
-			var hasOngoingLayouts = function() {
-				
-				var flows = document.getNamedFlows();
-				for(var i=0; i<flows.length; i++) {
-					if(flows[i].lastRelayout > lastWindowResize) continue;
-					if(flows[i].relayoutInProgress) {
-						return true;
-					}
-				}
-				
-				return false;
-				
-			}
-			var restartOngoingLayouts = function() {
-				
-				var flows = document.getNamedFlows();
-				for(var i=0; i<flows.length; i++) {
-					if(flows[i].lastRelayout > lastWindowResize) continue;
-					if(flows[i].relayoutInProgress) {
-						flows[i].relayout();
-					}
-				}
-				
-			}
-			window.addEventListener("resize",
-				function() {
-					
-					// update the last layout flag
-					lastWindowResize = +new Date();
-					
-					// if we aren't planning a resfresh already
-					if(!relayoutModifiedFlows.timeout) { 
-						
-						// if we are already busy
-						if(hasOngoingLayouts()) {
-							
-							// restart all layouts now
-							setTimeout(restartOngoingLayouts, 16);
-							
-							// wait half a second before restarting them from now
-							relayoutModifiedFlows.timeout = setTimeout(relayoutModifiedFlows, 500);
-							
-						} else {
-							
-							// debounce by running the resize code every 200ms
-							relayoutModifiedFlows.timeout = setTimeout(relayoutModifiedFlows, 200);
-							
-						}
-						
-					}
-					
-				}
-			);
-			
-		},
-		
-		// this dictionary is supposed to contains all the currently existing flows
-		flows: Object.create ? Object.create(null) : {}
-		
-	};
-	
-	enableObjectModel(window, document, cssRegions);
-	
-	return cssRegions;
-})(window, document);
+      }
+
+      var fixNullRect = function() {
+        if (rect.bottom == 0 && rect.top == 0 && rect.left == 0 && rect.right == 0) {
+          var scrollTop = -(document.documentElement.scrollTop || document.body.scrollTop)
+          var scrollLeft = -(document.documentElement.scrollLeft || document.body.scrollLeft)
+
+          rect = {
+            width: 0,
+            heigth: 0,
+            top: scrollTop,
+            bottom: scrollTop,
+            left: scrollLeft,
+            right: scrollLeft
+          }
+        }
+      }
+
+      // if the caret is outside the region
+      if (!r || (region !== r.endContainer && !Node.contains(region, r.endContainer))) {
+        // if the caret is after the region wrapper but inside the host...
+        if (
+          r &&
+          r.endContainer === region.cssRegionHost &&
+          r.endOffset == r.endContainer.childNodes.length
+        ) {
+          // move back at the end of the region, actually
+          r.setStart(region, region.childNodes.length)
+          r.setEnd(region, region.childNodes.length)
+        } else {
+          // move back into the region
+          r = r || document.createRange()
+          r.setStart(region, 0)
+          r.setEnd(region, 0)
+          dontOptimize = true
+        }
+      }
+
+      // start finding the natural breaking point
+      do {
+        // store the current selection rect for fast access
+        var rect = r.myGetExtensionRect()
+        fixNullRect()
+        debug()
+
+        //
+        // note: maybe the text is right-to-left
+        // in this case, we can go further than the caret
+        //
+
+        // move the end point char by char until it's completely in the region
+        while (
+          !(r.endContainer == region && r.endOffset == r.endContainer.childNodes.length) &&
+          rect.bottom <= pos.top + sizingH
+        ) {
+          debug()
+
+          // look if we can optimize by moving fast forward
+          var nextSibling = r.endContainer.childNodes[r.endOffset]
+          var nextSiblingRect = !nextSibling || Node.getBoundingClientRect(nextSibling)
+          if (nextSibling && nextSiblingRect.bottom <= pos.top + sizingH) {
+            // if yes, move element by element
+            r.setStartAfter(nextSibling)
+            r.setEndAfter(nextSibling)
+            rect = nextSiblingRect
+            fixNullRect()
+          } else {
+            // otherwise, go char-by-char
+            r.myMoveTowardRight()
+            rect = r.myGetExtensionRect()
+            fixNullRect()
+          }
+        }
+
+        //
+        // note: maybe the text is one line too big
+        // in this case, we have to backtrack a little
+        //
+
+        // move the end point char by char until it's completely in the region
+        while (!(r.endContainer == region && r.endOffset == 0) && rect.bottom > pos.top + sizingH) {
+          debug()
+          r.myMoveOneCharLeft()
+          rect = r.myGetExtensionRect()
+          fixNullRect()
+        }
+
+        debug()
+
+        //
+        // note: if we optimized via hit-testing, this may be wrong
+        // if next condition does not hold, we're fine.
+        // otherwhise we must restart without optimization...
+        //
+
+        // if the selected content is possibly off-target
+        var optimizationFailled = false
+        if (!dontOptimize) {
+          var current = r.endContainer
+          while ((current = cssRegionsHelpers.getAllLevelPreviousSibling(current, region))) {
+            if (Node.getBoundingClientRect(current).bottom > pos.top + sizingH) {
+              r.setStart(region, 0)
+              r.setEnd(region, 0)
+              optimizationFailled = true
+              dontOptimize = true
+              break
+            }
+          }
+        }
+      } while (optimizationFailled)
+
+      //
+      // note: we should not break the content inside monolithic content
+      // if we do, we need to change the selection to avoid that
+      //
+
+      // move the selection before the monolithic ancestors
+      var current = r.endContainer
+      while (current !== region) {
+        if (cssBreak.isMonolithic(current)) {
+          r.setEndBefore(current)
+        }
+        current = current.parentNode
+      }
+
+      // if the selection is not in the region anymore, add the whole region
+      if (!r || (region !== r.endContainer && !Node.contains(region, r.endContainer))) {
+        cssConsole.dir(r.cloneRange())
+        debugger
+        r.setStart(region, region.childNodes.length)
+        r.setEnd(region, region.childNodes.length)
+      }
+
+      //
+      // note: we don't want to break inside a line.
+      // backtrack to end of previous line...
+      //
+      var first = r.startContainer.childNodes[r.startOffset],
+        current = first
+      if (cssBreak.hasAnyInlineFlow(r.startContainer)) {
+        while (current && (current = current.previousSibling)) {
+          if (cssBreak.areInSameSingleLine(current, first)) {
+            // optimization: first and current are on the same line
+            // so if next and current are not the same line, it will still be
+            // the same line the "first" element is in
+            first = current
+
+            if (current instanceof Element) {
+              // we don't want to break inside text lines
+              r.setEndBefore(current)
+            } else {
+              // get last line via client rects
+              var lines = Node.getClientRects(current)
+
+              // if the text node did wrap into multiple lines
+              if (lines.length > 1) {
+                // move back from the end until we get into previous line
+                var previousLineBottom = lines[lines.length - 2].bottom
+                r.setEnd(current, current.nodeValue.length)
+                while (rect.bottom > previousLineBottom) {
+                  r.myMoveOneCharLeft()
+                  rect = r.myGetExtensionRect()
+                  fixNullRect()
+                }
+
+                // make sure we didn't exit the text node by mistake
+                if (r.endContainer !== current) {
+                  // if we did, there's something wrong about the text node
+                  // but we can consider the text node as an element instead
+                  r.setEndBefore(current) // debugger;
+                }
+              } else {
+                // we can consider the text node as an element
+                r.setEndBefore(current)
+              }
+            }
+          } else {
+            // if the two elements are not on the same line,
+            // then we just found a line break!
+            break
+          }
+        }
+      }
+
+      // if the selection is not in the region anymore, add the whole region
+      if (!r || (region !== r.endContainer && !Node.contains(region, r.endContainer))) {
+        cssConsole.dir(r.cloneRange())
+        debugger
+        r.setStart(region, region.childNodes.length)
+        r.setEnd(region, region.childNodes.length)
+      }
+
+      //
+      // note: the css-break spec says that a region should not be emtpy
+      //
+
+      // if we end up with nothing being selected, add the first block anyway
+      if (
+        r.endContainer === region &&
+        r.endOffset === 0 &&
+        r.endOffset !== region.childNodes.length
+      ) {
+        // find the first allowed break point
+        do {
+          //cssConsole.dir(r.cloneRange());
+
+          // move the position char-by-char
+          r.myMoveTowardRight()
+
+          // but skip long islands of monolithic elements
+          // since we know we cannot break inside them anyway
+          var current = r.endContainer
+          while (current && current !== region) {
+            if (cssBreak.isMonolithic(current)) {
+              r.setStartAfter(current)
+              r.setEndAfter(current)
+            }
+            current = current.parentNode
+          }
+        } while (
+          // do that until we reach a possible break point, or the end of the element
+          !cssBreak.isPossibleBreakPoint(r, region) &&
+          !(r.endContainer === region && r.endOffset === region.childNodes.length)
+        )
+      }
+
+      // if the selection is not in the region anymore, add the whole region
+      if (!r || (region !== r.endContainer && !Node.contains(region, r.endContainer))) {
+        cssConsole.dir(r.cloneRange())
+        debugger
+        r.setStart(region, region.childNodes.length)
+        r.setEnd(region, region.childNodes.length)
+      }
+
+      // now, let's try to find a break-before/break-after element before the splitting point
+      var current = r.endContainer
+      if (current.hasChildNodes()) {
+        if (r.endOffset > 0) {
+          current = current.childNodes[r.endOffset - 1]
+        }
+      }
+      var first = r.endContainer.firstChild
+      do {
+        if (current.style) {
+          if (current != first) {
+            if (
+              /(region|all|always)/i.test(
+                cssCascade.getSpecifiedStyle(current, 'break-before', undefined, true).toCSSString()
+              )
+            ) {
+              r.setStartBefore(current)
+              r.setEndBefore(current)
+              dontOptimize = true // no algo involved in breaking, after all
+            }
+          }
+
+          if (current !== region) {
+            if (
+              /(region|all|always)/i.test(
+                cssCascade.getSpecifiedStyle(current, 'break-after', undefined, true).toCSSString()
+              )
+            ) {
+              r.setStartAfter(current)
+              r.setEndAfter(current)
+              dontOptimize = true // no algo involved in breaking, after all
+            }
+          }
+        }
+      } while ((current = cssRegionsHelpers.getAllLevelPreviousSibling(current, region)))
+
+      // we're almost done! now, let's collect the ancestors to make some splitting postprocessing
+      var current = r.endContainer
+      var allAncestors = []
+      if (current.nodeType !== current.ELEMENT_NODE) current = current.parentNode
+      while (current !== region) {
+        allAncestors.push(current)
+        current = current.parentNode
+      }
+
+      //
+      // note: if we're about to split after the last child of
+      // an element which has bottom-{padding/border/margin},
+      // we need to figure how how much of that p/b/m we can
+      // actually keep in the first fragment
+      //
+      // TODO: avoid top & bottom p/b/m cuttings to use the
+      // same variables names, it's ugly
+      //
+
+      // split bottom-{margin/border/padding} correctly
+      if (r.endOffset == r.endContainer.childNodes.length && r.endContainer !== region) {
+        // compute how much of the bottom border can actually fit
+        var box = r.endContainer.getBoundingClientRect()
+        var excessHeight = box.bottom - (pos.top + sizingH)
+        var endContainerStyle = getComputedStyle(r.endContainer)
+        var availBorderHeight = parseFloat(endContainerStyle.borderBottomWidth)
+        var availPaddingHeight = parseFloat(endContainerStyle.paddingBottom)
+
+        // start by cutting into the border
+        var borderCut = excessHeight
+        if (excessHeight > availBorderHeight) {
+          borderCut = availBorderHeight
+          excessHeight -= borderCut
+
+          // continue by cutting into the padding
+          var paddingCut = excessHeight
+          if (paddingCut > availPaddingHeight) {
+            paddingCut = availPaddingHeight
+            excessHeight -= paddingCut
+          } else {
+            excessHeight = 0
+          }
+        } else {
+          excessHeight = 0
+        }
+
+        // we don't cut borders with radiuses
+        // TODO: accept to cut the content not affected by the radius
+        if (typeof borderCut === 'number' && borderCut !== 0) {
+          // check the presence of a radius:
+          var hasBottomRadius =
+            parseInt(endContainerStyle.borderBottomLeftRadius) > 0 ||
+            parseInt(endContainerStyle.borderBottomRightRadius) > 0
+
+          if (hasBottomRadius) {
+            // break before the whole border:
+            borderCut = availBorderHeight
+          }
+        }
+      }
+
+      // split top-{margin/border/padding} correctly
+      if (r.endOffset == 0 && r.endContainer !== region) {
+        // note: the only possibility here is that we
+        // did split after a padding or a border.
+        //
+        // it can only happen if the border/padding is
+        // too big to fit the region but is actually
+        // the first break we could find!
+
+        // compute how much of the top border can actually fit
+        var box = r.endContainer.getBoundingClientRect()
+        var availHeight = pos.top + sizingH - pos.top
+        var endContainerStyle = getComputedStyle(r.endContainer)
+        var availBorderHeight = parseFloat(endContainerStyle.borderTopWidth)
+        var availPaddingHeight = parseFloat(endContainerStyle.paddingTop)
+        var excessHeight = availBorderHeight + availPaddingHeight - availHeight
+
+        if (excessHeight > 0) {
+          // start by cutting into the padding
+          var topPaddingCut = excessHeight
+          if (excessHeight > availPaddingHeight) {
+            topPaddingCut = availPaddingHeight
+            excessHeight -= topPaddingCut
+
+            // continue by cutting into the border
+            var topBorderCut = excessHeight
+            if (topBorderCut > availBorderHeight) {
+              topBorderCut = availBorderHeight
+              excessHeight -= topBorderCut
+            } else {
+              excessHeight = 0
+            }
+          } else {
+            excessHeight = 0
+          }
+        }
+      }
+
+      // remove bottom-{pbm} from all ancestors involved in the cut
+      for (var i = allAncestors.length - 1; i >= 0; i--) {
+        allAncestors[i].setAttribute('data-css-continued-fragment', true)
+        if (getComputedStyle(allAncestors[i]).display.indexOf('block') >= 0) {
+          allAncestors[i].setAttribute('data-css-continued-block-fragment', true)
+        }
+      }
+      if (typeof borderCut === 'number') {
+        allAncestors[0].removeAttribute('data-css-continued-fragment')
+        allAncestors[0].setAttribute('data-css-special-continued-fragment', true)
+        allAncestors[0].style.borderBottomWidth = availBorderHeight - borderCut + 'px'
+      }
+      if (typeof paddingCut === 'number') {
+        allAncestors[0].removeAttribute('data-css-continued-fragment')
+        allAncestors[0].setAttribute('data-css-special-continued-fragment', true)
+        allAncestors[0].style.paddingBottom = availPaddingHeight - paddingCut + 'px'
+      }
+      if (typeof topBorderCut === 'number') {
+        allAncestors[0].removeAttribute('data-css-continued-fragment')
+        allAncestors[0].setAttribute('data-css-continued-fragment', true)
+        allAncestors[0].style.borderTopWidth = availBorderHeight - topBorderCut + 'px'
+      }
+      if (typeof topPaddingCut === 'number') {
+        allAncestors[0].removeAttribute('data-css-continued-fragment')
+        allAncestors[0].setAttribute('data-css-special-continued-fragment', true)
+        allAncestors[0].style.paddingTop = availPaddingHeight - topPaddingCut + 'px'
+      }
+
+      //
+      // note: at this point we have a collapsed range
+      // located at the split point
+      //
+
+      // select the overflowing content
+      r.setEnd(region, region.childNodes.length)
+
+      // extract it from the current region
+      var overflowingContent = r.extractContents()
+
+      // remove trailing whitespace from the cut element
+      var tmp = allAncestors[0]
+      if (tmp && (tmp = tmp.lastChild) && !tmp.tagName && tmp.nodeValue) {
+        var nodeValue = tmp.nodeValue.replace(/(\s|\r|\n)*$/, '')
+        if (nodeValue) {
+          // if the last cut was just after a &shy; (soft hyphen), we need to append a dash
+          if (/\u00AD$/.test(nodeValue)) {
+            nodeValue = nodeValue.replace(/\u00AD$/, '-')
+          } else if (overflowingContent && overflowingContent.textContent[0] == '\u00AD') {
+            nodeValue = nodeValue + '-'
+          }
+          tmp.nodeValue = nodeValue
+        } else {
+          tmp.parentNode.removeChild(tmp)
+        }
+      }
+
+      //
+      // note: now we have to cancel out the artifacts of
+      // the fragments cloning algorithm...
+      //
+
+      // do not forget to remove any top p/b/m on cut elements
+      var newFragments = overflowingContent.querySelectorAll('[data-css-continued-fragment]')
+      for (var i = newFragments.length; i--; ) {
+        // TODO: optimize by using while loop and a simple matchesSelector.
+        newFragments[i].removeAttribute('data-css-continued-fragment')
+        newFragments[i].setAttribute('data-css-starting-fragment', true)
+      }
+
+      // deduct any already-used bottom p/b/m
+      var specialNewFragment = overflowingContent.querySelector(
+        '[data-css-special-continued-fragment]'
+      )
+      if (specialNewFragment) {
+        specialNewFragment.removeAttribute('data-css-special-continued-fragment')
+        specialNewFragment.setAttribute('data-css-starting-fragment', true)
+
+        if (typeof borderCut === 'number') {
+          specialNewFragment.style.borderBottomWidth = borderCut + 'px'
+        }
+        if (typeof paddingCut === 'number') {
+          specialNewFragment.style.paddingBottom = paddingCut
+        } else {
+          specialNewFragment.style.paddingBottom = '0px'
+        }
+
+        if (typeof topBorderCut === 'number') {
+          specialNewFragment.removeAttribute('data-css-starting-fragment')
+          specialNewFragment.setAttribute('data-css-special-starting-fragment', true)
+          specialNewFragment.style.borderTopWidth = topBorderCut + 'px'
+        }
+        if (typeof topPaddingCut === 'number') {
+          specialNewFragment.removeAttribute('data-css-starting-fragment')
+          specialNewFragment.setAttribute('data-css-special-starting-fragment', true)
+          specialNewFragment.style.paddingTop = topPaddingCut + 'px'
+          specialNewFragment.style.paddingBottom = '0px'
+          specialNewFragment.style.borderBottomWidth = '0px'
+        }
+      } else if (typeof borderCut === 'number') {
+        // hum... there's an element missing here... {never happens anymore}
+        try {
+          throw new Error()
+        } catch (ex) {
+          setImmediate(function() {
+            throw ex
+          })
+        }
+      } else if (typeof topPaddingCut === 'number') {
+        // hum... there's an element missing here... {never happens anymore}
+        try {
+          throw new Error()
+        } catch (ex) {
+          setImmediate(function() {
+            throw ex
+          })
+        }
+      }
+
+      // make sure empty nodes are reintroduced
+      cssRegionsHelpers.unembedTrailingWhiteSpaceNodes(region)
+      cssRegionsHelpers.unembedTrailingWhiteSpaceNodes(overflowingContent)
+
+      // we're ready to return our result!
+      return overflowingContent
+    },
+
+    enablePolyfill: function enablePolyfill() {
+      //
+      // [0] insert necessary css
+      //
+      var s = document.createElement('style')
+      s.setAttribute('data-css-no-polyfill', true)
+      s.textContent = CSS_STYLE
+      var head = document.head || document.getElementsByTagName('head')[0]
+      head.appendChild(s)
+
+      //
+      // [1] when any update happens:
+      // construct new content and region flow pairs
+      // restart the region layout algorithm for the modified pairs
+      //
+      cssCascade.startMonitoringProperties(['flow-into', 'flow-from', 'region-fragment'], {
+        onupdate: function onupdate(element, rule) {
+          // let's just ignore fragments
+          if (element.getAttributeNode('data-css-regions-fragment-of')) return
+
+          // log some message in the console for debug
+          cssConsole.dir({
+            message: 'onupdate',
+            element: element,
+            selector: rule.selector.toCSSString(),
+            rule: rule
+          })
+          var temp = null
+
+          //
+          // compute the value of region properties
+          //
+          var flowInto = cssCascade.getSpecifiedStyle(element, 'flow-into').filter(function(t) {
+            return t instanceof cssSyntax.IdentifierToken
+          })
+
+          var flowIntoName = flowInto[0] ? flowInto[0].toCSSString().toLowerCase() : ''
+          if (
+            flowIntoName == 'none' ||
+            flowIntoName == 'initial' ||
+            flowIntoName == 'inherit' ||
+            flowIntoName == 'default'
+          ) {
+            flowIntoName = ''
+          }
+          var flowIntoType = flowInto[1] ? flowInto[1].toCSSString().toLowerCase() : ''
+          if (flowIntoType != 'content') {
+            flowIntoType = 'element'
+          }
+          var flowInto = flowIntoName ? flowIntoName + ' ' + flowIntoType : ''
+
+          var flowFrom = cssCascade.getSpecifiedStyle(element, 'flow-from').filter(function(t) {
+            return t instanceof cssSyntax.IdentifierToken
+          })
+
+          var flowFromName = flowFrom[0] ? flowFrom[0].toCSSString().toLowerCase() : ''
+          if (
+            flowFromName == 'none' ||
+            flowFromName == 'initial' ||
+            flowFromName == 'inherit' ||
+            flowFromName == 'default'
+          ) {
+            flowFromName = ''
+          }
+          var flowFrom = flowFromName
+
+          //
+          // if the value of any property did change...
+          //
+          if (
+            element.cssRegionsLastFlowInto != flowInto ||
+            element.cssRegionsLastFlowFrom != flowFrom
+          ) {
+            // remove the element from previous regions
+            var regionOverset = element.regionOverset
+            var lastFlowFrom = cssRegions.flows[element.cssRegionsLastFlowFromName]
+            var lastFlowInto = cssRegions.flows[element.cssRegionsLastFlowIntoName]
+            lastFlowFrom && lastFlowFrom.removeFromRegions(element)
+            lastFlowInto && lastFlowInto.removeFromContent(element)
+
+            // relayout those regions
+            // (it's async so it will wait for us
+            // to add the element back if needed)
+            lastFlowFrom && regionOverset != 'empty' && lastFlowFrom.relayout()
+            lastFlowInto && lastFlowInto.relayout()
+
+            // save some property values for later
+            element.cssRegionsLastFlowInto = flowInto
+            element.cssRegionsLastFlowFrom = flowFrom
+            element.cssRegionsLastFlowIntoName = flowIntoName
+            element.cssRegionsLastFlowFromName = flowFromName
+            element.cssRegionsLastFlowIntoType = flowIntoType
+
+            // add the element to new regions
+            // and relayout those regions, if deemed necessary
+            if (flowFromName) {
+              var lastFlowFrom = (cssRegions.flows[flowFromName] =
+                cssRegions.flows[flowFromName] || new cssRegions.Flow(flowFromName))
+              lastFlowFrom && lastFlowFrom.addToRegions(element)
+              lastFlowFrom && lastFlowFrom.relayout()
+            }
+            if (flowIntoName) {
+              var lastFlowInto = (cssRegions.flows[flowIntoName] =
+                cssRegions.flows[flowIntoName] || new cssRegions.Flow(flowIntoName))
+              lastFlowInto && lastFlowInto.addToContent(element)
+              lastFlowInto && lastFlowInto.relayout()
+            }
+          }
+        }
+      })
+      cssCascade.startMonitoringProperties(['break-before', 'break-after'], {
+        onupdate: function(element) {
+          // avoid fragments triggering update loops
+          if (element.getAttribute('data-css-regions-fragment-of')) {
+            return
+          }
+
+          // update parent regions
+          while (element) {
+            if (element.cssRegionsLastFlowIntoName) {
+              cssRegions.flows[element.cssRegionsLastFlowIntoName].relayout()
+              return
+            }
+            element = element.parentNode
+          }
+        }
+      })
+
+      //
+      // [2] perform the OM exports
+      //
+      cssRegions.enablePolyfillObjectModel()
+
+      //
+      // [3] make sure to update the region layout when all images loaded
+      //
+      window.addEventListener('load', function() {
+        var flows = document.getNamedFlows()
+        for (var i = 0; i < flows.length; i++) {
+          flows[i].relayout()
+        }
+      })
+
+      //
+      // [4] make sure we react to window resizes
+      //
+      //
+      var lastWindowResize = 0
+      var relayoutModifiedFlows = function() {
+        // specify the function did run
+        relayoutModifiedFlows.timeout = 0
+
+        // rerun the layout
+        var flows = document.getNamedFlows()
+        for (var i = 0; i < flows.length; i++) {
+          if (flows[i].lastRelayout > lastWindowResize) continue
+          if (flows[i].relayoutInProgress) {
+            flows[i].relayout()
+          } else {
+            flows[i].relayoutIfSizeChanged()
+          }
+        }
+      }
+      var hasOngoingLayouts = function() {
+        var flows = document.getNamedFlows()
+        for (var i = 0; i < flows.length; i++) {
+          if (flows[i].lastRelayout > lastWindowResize) continue
+          if (flows[i].relayoutInProgress) {
+            return true
+          }
+        }
+
+        return false
+      }
+      var restartOngoingLayouts = function() {
+        var flows = document.getNamedFlows()
+        for (var i = 0; i < flows.length; i++) {
+          if (flows[i].lastRelayout > lastWindowResize) continue
+          if (flows[i].relayoutInProgress) {
+            flows[i].relayout()
+          }
+        }
+      }
+      window.addEventListener('resize', function() {
+        // update the last layout flag
+        lastWindowResize = +new Date()
+
+        // if we aren't planning a resfresh already
+        if (!relayoutModifiedFlows.timeout) {
+          // if we are already busy
+          if (hasOngoingLayouts()) {
+            // restart all layouts now
+            setTimeout(restartOngoingLayouts, 16)
+
+            // wait half a second before restarting them from now
+            relayoutModifiedFlows.timeout = setTimeout(relayoutModifiedFlows, 500)
+          } else {
+            // debounce by running the resize code every 200ms
+            relayoutModifiedFlows.timeout = setTimeout(relayoutModifiedFlows, 200)
+          }
+        }
+      })
+    },
+
+    // this dictionary is supposed to contains all the currently existing flows
+    flows: Object.create ? Object.create(null) : {}
+  }
+
+  enableObjectModel(window, document, cssRegions)
+
+  return cssRegions
+})(window, document)
 
 require.define('src/css-regions/polyfill.js');
 
