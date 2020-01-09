@@ -1021,6 +1021,6 @@ module.exports = (function(window, document) {
   }
 
   enableObjectModel(window, document, cssRegions)
-
+  window.cssRegions = cssRegions
   return cssRegions
 })(window, document)
