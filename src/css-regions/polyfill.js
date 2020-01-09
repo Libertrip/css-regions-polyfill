@@ -130,17 +130,23 @@ module.exports = (function(window, document) {
       startTime
     ) {
       // delays until all images are loaded
-      // var imgs = region.getElementsByTagName('img');
-      // for(var imgs_index=imgs.length; imgs_index--; ) {
-      // 	if(!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
-      // 		return setTimeout(
-      // 			function() {
-      // 				this.layoutContentInNextRegionsWhenReady(region, regions, remainingContent, callback, startTime+32);
-      // 			}.bind(this),
-      // 			16
-      // 		);
-      // 	}
-      // }
+      var imgs = region.getElementsByTagName('img')
+      for (var imgs_index = imgs.length; imgs_index--; ) {
+        if (!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
+          return setTimeout(
+            function() {
+              this.layoutContentInNextRegionsWhenReady(
+                region,
+                regions,
+                remainingContent,
+                callback,
+                startTime + 32
+              )
+            }.bind(this),
+            16
+          )
+        }
+      }
 
       // check if there was an overflow or some break-before/after instruction
       var regionDidOverflow = region.cssRegionHost.scrollHeight != region.cssRegionHost.offsetHeight
@@ -215,23 +221,23 @@ module.exports = (function(window, document) {
       startTime
     ) {
       // delays until all images are loaded
-      // var imgs = region.getElementsByTagName('img')
-      // for (var imgs_index = imgs.length; imgs_index--; ) {
-      //   if (!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
-      //     return setTimeout(
-      //       function() {
-      //         this.layoutContentInLastRegionWhenReady(
-      //           region,
-      //           regions,
-      //           remainingContent,
-      //           callback,
-      //           startTime + 32
-      //         )
-      //       }.bind(this),
-      //       32
-      //     )
-      //   }
-      // }
+      var imgs = region.getElementsByTagName('img')
+      for (var imgs_index = imgs.length; imgs_index--; ) {
+        if (!imgs[imgs_index].complete && !imgs[imgs_index].hasAttribute('height')) {
+          return setTimeout(
+            function() {
+              this.layoutContentInLastRegionWhenReady(
+                region,
+                regions,
+                remainingContent,
+                callback,
+                startTime + 32
+              )
+            }.bind(this),
+            32
+          )
+        }
+      }
 
       // support region-fragment: break
       if (
@@ -1021,6 +1027,8 @@ module.exports = (function(window, document) {
   }
 
   enableObjectModel(window, document, cssRegions)
+
   window.cssRegions = cssRegions
+
   return cssRegions
 })(window, document)

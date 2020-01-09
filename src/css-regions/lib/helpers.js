@@ -428,103 +428,106 @@ module.exports = (function(window, document) {
         var child1, next1, child2, next2
         switch (node1.nodeType) {
           case 1: // Element node
-            // // firstly, setup a cache of all css properties on the element
-            // var matchedRules = (node1.currentStyle && !window.opera) ? undefined : cssCascade.findAllMatchingRules(node1)
+            // firstly, setup a cache of all css properties on the element
+            var matchedRules =
+              node1.currentStyle && !window.opera
+                ? undefined
+                : cssCascade.findAllMatchingRules(node1)
 
-            // // and compute the value of all css properties
-            // var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties();
-            // for(var p=properties.length; p--; ) {
+            // and compute the value of all css properties
+            var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties()
+            for (var p = properties.length; p--; ) {
+              // if the property is computation-safe, use the computed value
+              if (
+                !(properties[p] in cssCascade.computationUnsafeProperties) &&
+                properties[p][0] != '-'
+              ) {
+                var style = getComputedStyle(node1).getPropertyValue(properties[p])
+                var defaultStyle = cssCascade
+                  .getDefaultStyleForTag(node1.tagName)
+                  .getPropertyValue(properties[p])
+                if (style != defaultStyle) node2.style.setProperty(properties[p], style)
+                continue
+              }
 
-            // 	// if the property is computation-safe, use the computed value
-            // 	if(!(properties[p] in cssCascade.computationUnsafeProperties) && properties[p][0]!='-') {
-            // 		var style = getComputedStyle(node1).getPropertyValue(properties[p]);
-            // 		var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
-            // 		if(style != defaultStyle) node2.style.setProperty(properties[p], style)
-            // 		continue;
-            // 	}
+              // otherwise, get the element's specified value
+              var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules)
+              if (cssValue && cssValue.length) {
+                // if we have a specified value, let's use it
+                node2.style.setProperty(properties[p], cssValue.toCSSString())
+              } else if (isRoot && node1.parentNode && properties[p][0] != '-') {
+                // NOTE: the root will be detached from its parent
+                // Therefore, we have to inherit styles from it (oh no!)
 
-            // 	// otherwise, get the element's specified value
-            // 	var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules);
-            // 	if(cssValue && cssValue.length) {
+                // TODO: create a list of inherited properties
+                if (!(properties[p] in cssCascade.inheritingProperties)) continue
 
-            // 		// if we have a specified value, let's use it
-            // 		node2.style.setProperty(properties[p], cssValue.toCSSString());
+                // if the property is computation-safe, use the computed value
+                if (
+                  properties[p] == 'font-size' ||
+                  (!(properties[p] in cssCascade.computationUnsafeProperties) &&
+                    properties[p][0] != '-')
+                ) {
+                  var style = getComputedStyle(node1).getPropertyValue(properties[p])
+                  node2.style.setProperty(properties[p], style)
+                  //var parentStyle = style; try { parentStyle = getComputedStyle(node1.parentNode).getPropertyValue(properties[p]) } catch(ex){}
+                  //var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
 
-            // 	} else if(isRoot && node1.parentNode && properties[p][0] != '-') {
+                  //if(style === parentStyle) {
+                  //  node2.style.setProperty(properties[p], style)
+                  //}
+                  continue
+                }
 
-            // 		// NOTE: the root will be detached from its parent
-            // 		// Therefore, we have to inherit styles from it (oh no!)
+                // otherwise, get the parent's specified value
+                var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules)
+                if (cssValue && cssValue.length) {
+                  // if we have a specified value, let's use it
+                  node2.style.setProperty(properties[p], cssValue.toCSSString())
+                }
+              }
+            }
 
-            // 		// TODO: create a list of inherited properties
-            // 		if(!(properties[p] in cssCascade.inheritingProperties)) continue;
+            // now, let's work on ::after and ::before
+            var importPseudo = function(node1, node2, pseudo) {
+              //
+              // we'll need to use getSpecifiedStyle here as the pseudo thing is slow
+              //
+              var mayExist = !!cssCascade.findAllMatchingRulesWithPseudo(node1, pseudo.substr(1))
+                .length
+              if (!mayExist) return
 
-            // 		// if the property is computation-safe, use the computed value
-            // 		if((properties[p]=="font-size") || (!(properties[p] in cssCascade.computationUnsafeProperties) && properties[p][0]!='-')) {
-            // 			var style = getComputedStyle(node1).getPropertyValue(properties[p]);
-            // 			node2.style.setProperty(properties[p], style);
-            // 			//var parentStyle = style; try { parentStyle = getComputedStyle(node1.parentNode).getPropertyValue(properties[p]) } catch(ex){}
-            // 			//var defaultStyle = cssCascade.getDefaultStyleForTag(node1.tagName).getPropertyValue(properties[p]);
+              var pseudoStyle = getComputedStyle(node1, pseudo)
+              if (pseudoStyle.content != 'none') {
+                // let's create a stylesheet for the element
+                var stylesheet = document.createElement('style')
+                stylesheet.setAttribute('data-no-css-polyfill', true)
 
-            // 			//if(style === parentStyle) {
-            // 			//  node2.style.setProperty(properties[p], style)
-            // 			//}
-            // 			continue;
-            // 		}
+                // compute the value of all css properties
+                var node2style = ''
+                var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties()
+                for (var p = properties.length; p--; ) {
+                  // we always use the computed value, because we don't have better
+                  var style = pseudoStyle.getPropertyValue(properties[p])
+                  node2style += properties[p] + ':' + style + ';'
+                }
 
-            // 		// otherwise, get the parent's specified value
-            // 		var cssValue = cssCascade.getSpecifiedStyle(node1, properties[p], matchedRules);
-            // 		if(cssValue && cssValue.length) {
+                stylesheet.textContent =
+                  '[data-css-regions-fragment-of="' +
+                  node1.getAttribute('data-css-regions-fragment-source') +
+                  '"]' +
+                  ':not([data-css-regions-starting-fragment]):not([data-css-regions-special-starting-fragment])' +
+                  ':' +
+                  pseudo +
+                  '{' +
+                  node2style +
+                  '}'
 
-            // 			// if we have a specified value, let's use it
-            // 			node2.style.setProperty(properties[p], cssValue.toCSSString());
-
-            // 		}
-
-            // 	}
-
-            // }
-
-            // // now, let's work on ::after and ::before
-            // var importPseudo = function(node1,node2,pseudo) {
-
-            // 	//
-            // 	// we'll need to use getSpecifiedStyle here as the pseudo thing is slow
-            // 	//
-            // 	var mayExist = !!cssCascade.findAllMatchingRulesWithPseudo(node1,pseudo.substr(1)).length;
-            // 	if(!mayExist) return;
-
-            // 	var pseudoStyle = getComputedStyle(node1,pseudo);
-            // 	if(pseudoStyle.content!='none'){
-
-            // 		// let's create a stylesheet for the element
-            // 		var stylesheet = document.createElement('style');
-            // 		stylesheet.setAttribute('data-no-css-polyfill',true);
-
-            // 		// compute the value of all css properties
-            // 		var node2style = "";
-            // 		var properties = cssCascade.allCSSProperties || cssCascade.getAllCSSProperties();
-            // 		for(var p=properties.length; p--; ) {
-
-            // 			// we always use the computed value, because we don't have better
-            // 			var style = pseudoStyle.getPropertyValue(properties[p]);
-            // 			node2style += properties[p]+":"+style+";";
-
-            // 		}
-
-            // 		stylesheet.textContent = (
-            // 			'[data-css-regions-fragment-of="' + node1.getAttribute('data-css-regions-fragment-source') + '"]'
-            // 			+':not([data-css-regions-starting-fragment]):not([data-css-regions-special-starting-fragment])'
-            // 			+':'+pseudo+'{'
-            // 			+node2style
-            // 			+"}"
-            // 		);
-
-            // 		node2.parentNode.insertBefore(stylesheet, node2);
-
-            // 	}
-            // }
-            // importPseudo(node1,node2,":before");
-            // importPseudo(node1,node2,":after");
+                node2.parentNode.insertBefore(stylesheet, node2)
+              }
+            }
+            importPseudo(node1, node2, ':before')
+            importPseudo(node1, node2, ':after')
 
             // retarget events
             cssRegionsHelpers.retargetEvents(node1, node2)
