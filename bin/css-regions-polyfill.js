@@ -1,4 +1,4 @@
-/*! CSS-REGIONS-POLYFILL - v3.0.0 - 2018-10-15 - https://github.com/FremyCompany/css-regions-polyfill - Copyright (c) 2018 François REMY; MIT-Licensed !*/
+/*! CSS-REGIONS-POLYFILL - v3.0.0 - 2020-01-09 - https://github.com/FremyCompany/css-regions-polyfill - Copyright (c) 2020 François REMY; MIT-Licensed !*/
 
 !(function() { 'use strict';
     var module = { exports:{} };
@@ -6290,7 +6290,7 @@ module.exports = (function(window, document) {
   }
 
   enableObjectModel(window, document, cssRegions)
-
+  window.cssRegions = cssRegions
   return cssRegions
 })(window, document)
 
